@@ -268,7 +268,8 @@ procedure TClipboardPage.OpenFromHotkey(APrevWnd: HWND);
 begin
   FPrevWnd := APrevWnd;
   FSearch.Value := '';
-  if FSearch.CanFocus then
+  // CanFocus não olha se o form está visível.
+  if FSearch.CanFocus and GetParentForm(FSearch).Visible then
     FSearch.SetFocus;
 end;
 

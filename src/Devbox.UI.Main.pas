@@ -533,8 +533,14 @@ end;
 
 procedure TMainForm.MenuOpenClick(Sender: TObject);
 begin
-  FClipboard.OpenFromHotkey(0);
-  ShowWindow_;
+  // Janela antes do foco: SetFocus com o form escondido levanta exceção.
+  // O clique duplo da bandeja não trata exceção: sem o except, o app fecha.
+  try
+    ShowWindow_;
+    FClipboard.OpenFromHotkey(0);
+  except
+    Application.HandleException(Self);
+  end;
 end;
 
 procedure TMainForm.MenuExitClick(Sender: TObject);

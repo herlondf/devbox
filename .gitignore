@@ -1,0 +1,20 @@
+# Saída do Delphi
+bin/
+dcu/
+__history/
+__recovery/
+*.local
+*.identcache
+*.dsk
+*.stat
+*.res
+
+# Docs internos de desenvolvimento e config de agentes: ficam só na máquina
+AGENTS.md
+CLAUDE.md
+.claude/
+memory/
+docs/RESUME.md
+docs/CHECKPOINT.md
+docs/TASK.md
+docs/VALIDATION.md

@@ -1,7 +1,7 @@
 ﻿<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <PropertyGroup>
-    <ProjectGuid>{9A359B56-2B76-41D8-A249-88F924F53B69}</ProjectGuid>
-    <MainSource>Devbox.dpr</MainSource>
+    <ProjectGuid>{02512E0E-FEAE-4B07-97F5-2B99BFCED85D}</ProjectGuid>
+    <MainSource>DevboxHelper.dpr</MainSource>
     <Base>True</Base>
     <Config Condition="'$(Config)'==''">Debug</Config>
     <Platform Condition="'$(Platform)'==''">Win32</Platform>
@@ -26,7 +26,7 @@
   <PropertyGroup Condition="'$(Base)'!=''">
     <CUI Condition="'$(CUI)'==''">..\..\Delphi\ComponentesUI</CUI>
     <DCC_CodePage>65001</DCC_CodePage>
-    <SanitizedProjectName>Devbox</SanitizedProjectName>
+    <SanitizedProjectName>DevboxHelper</SanitizedProjectName>
     <DCC_Namespace>Vcl;Vcl.Imaging;Winapi;System.Win;Data.Win;System;Data;$(DCC_Namespace)</DCC_Namespace>
     <DCC_UnitSearchPath>$(CUI)\src;$(CUI)\src\core;$(CUI)\src\components\basic;$(CUI)\src\components\feedback;$(CUI)\src\components\layout;$(CUI)\src\components\data;$(CUI)\src\components\form;$(CUI)\src\components\display;$(CUI)\src\components\overlay;$(CUI)\src\components\nav;$(CUI)\src\components\report;$(CUI)\src\components\assistant;$(CUI)\thirdpart\skia4delphi\Source;$(CUI)\thirdpart\skia4delphi\Source\VCL;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>
     <DCC_DcuOutput>..\dcu\$(Platform)\$(Config)</DCC_DcuOutput>
@@ -35,7 +35,6 @@
     <AppDPIAwarenessMode>PerMonitorV2</AppDPIAwarenessMode>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Base_Win32)'!=''">
-    <PostBuildEvent>copy /Y "$(CUI)\tests\bin\Win32\Debug\sk4d.dll" "$(ProjectDir)..\bin\Win32\$(Config)\"&amp;&amp; copy /Y "$(ProjectDir)ocr.ps1" "$(ProjectDir)..\bin\Win32\$(Config)\"</PostBuildEvent>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Config)'=='Debug' or '$(Cfg_1)'!=''">
     <Cfg_1>true</Cfg_1>
@@ -62,35 +61,12 @@
     <DCCReference Include="Devbox.Model.pas"/>
     <DCCReference Include="Devbox.Store.pas"/>
     <DCCReference Include="Devbox.Sys.pas"/>
-    <DCCReference Include="Devbox.Secrets.pas"/>
-    <DCCReference Include="Devbox.Convert.pas"/>
-    <DCCReference Include="Devbox.Cleanup.pas"/>
-    <DCCReference Include="Devbox.Jobs.pas"/>
-    <DCCReference Include="Devbox.Net.pas"/>
-    <DCCReference Include="Devbox.Envs.pas"/>
-    <DCCReference Include="Devbox.Focus.pas"/>
-    <DCCReference Include="Devbox.Tools.pas"/>
-    <DCCReference Include="Devbox.AI.pas"/>
-    <DCCReference Include="Devbox.SysInfo.pas"/>
-    <DCCReference Include="Devbox.Notify.pas"/>
+    <DCCReference Include="Devbox.Keys.pas"/>
     <DCCReference Include="Devbox.Helper.pas"/>
     <DCCReference Include="Devbox.UI.Kit.pas"/>
     <DCCReference Include="Devbox.UI.DialogBase.pas"/>
-    <DCCReference Include="Devbox.UI.Dialogs.pas"/>
-    <DCCReference Include="Devbox.UI.Clipboard.pas"/>
-    <DCCReference Include="Devbox.UI.Expander.pas"/>
-    <DCCReference Include="Devbox.UI.Focus.pas"/>
-    <DCCReference Include="Devbox.UI.Tools.pas"/>
-    <DCCReference Include="Devbox.UI.Services.pas"/>
-    <DCCReference Include="Devbox.UI.Cleanup.pas"/>
-    <DCCReference Include="Devbox.UI.Network.pas"/>
-    <DCCReference Include="Devbox.UI.System.pas"/>
-    <DCCReference Include="Devbox.UI.Envs.pas"/>
-    <DCCReference Include="Devbox.UI.AICommand.pas"/>
-    <DCCReference Include="Devbox.UI.Jobs.pas"/>
-    <DCCReference Include="Devbox.UI.Watches.pas"/>
-    <DCCReference Include="Devbox.UI.Settings.pas"/>
-    <DCCReference Include="Devbox.UI.Main.pas"/>
+    <DCCReference Include="Devbox.UI.Capture.pas"/>
+    <DCCReference Include="Devbox.Helper.Main.pas"/>
     <BuildConfiguration Include="Base">
       <Key>Base</Key>
     </BuildConfiguration>
@@ -109,7 +85,7 @@
     <BorlandProject>
       <Delphi.Personality>
         <Source>
-          <Source Name="MainSource">Devbox.dpr</Source>
+          <Source Name="MainSource">DevboxHelper.dpr</Source>
         </Source>
       </Delphi.Personality>
       <Platforms>

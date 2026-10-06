@@ -1,7 +1,7 @@
 unit Devbox.Sys;
 
 { Tudo que fala com o Windows: processos de linha de comando, clipboard,
-  portas em escuta, autostart. }
+  OCR, portas em escuta, autostart. }
 
 interface
 
@@ -12,24 +12,42 @@ uses
   Devbox.Model;
 
 type
-  { Avisa cada texto novo copiado em qualquer programa. Pula o que o
-    gerenciador de senhas marca como sigiloso e o que o próprio Devbox escreveu. }
+  TClipEvent = reference to procedure(AKind: TClipKind; const AText: string; const AData: TBytes);
+
+  { Avisa cada coisa nova copiada em qualquer programa: texto, imagem (vira PNG)
+    ou arquivos (um caminho por linha). Pula o que o gerenciador de senhas marca
+    como sigiloso e o que o próprio Devbox acabou de escrever. }
   TClipboardWatcher = class
   private
     FWnd: HWND;
-    FOnText: TProc<string>;
-    FSkipText: string;
+    FOnClip: TClipEvent;
+    FIgnoreUntil: UInt64;
     procedure WndProc(var Message: TMessage);
+    procedure Wrote;
   public
-    constructor Create(const AOnText: TProc<string>);
+    constructor Create(const AOnClip: TClipEvent);
     destructor Destroy; override;
-    { Põe o texto no clipboard sem ele voltar como "novo". }
+    { Põem no clipboard sem voltar como "novo". }
     procedure SetText(const AText: string);
+    procedure SetImage(const APng: TBytes);
+    procedure SetFiles(const APaths: TArray<string>);
   end;
+
+{ Ctrl+V sintético para o programa da frente. }
+procedure SendCtrlV;
+procedure SendKeyInputs(const AKeys: array of Word; const AUp: array of Boolean);
+
+{ Traz a janela para a frente mesmo com o Windows barrando troca de foco
+  (um Alt sintético libera o SetForegroundWindow). }
+procedure ForceForeground(AWnd: HWND);
+
+{ Texto da imagem pelo OCR do Windows (ocr.ps1 ao lado do exe). Bloqueia. }
+function OcrImage(const APngPath: string; out AText: string): Boolean;
 
 { Roda e devolve a saída (stdout + stderr). -1 = não achou o programa;
   -2 = passou do tempo. Bloqueia: chamar fora da thread de UI. }
-function RunCapture(const ACmdLine: string; out AOutput: string; ATimeoutMs: Cardinal = 15000): Integer;
+function RunCapture(const ACmdLine: string; out AOutput: string; ATimeoutMs: Cardinal = 15000;
+  const AWorkDir: string = ''): Integer;
 
 { Portas TCP em escuta (IPv4 e IPv6, uma linha por porta) com o processo dono. }
 function ListListenPorts: TListenPorts;
@@ -53,17 +71,28 @@ uses
   System.Generics.Collections,
   Winapi.ShellAPI,
   Winapi.TlHelp32,
+  Winapi.ShlObj,
+  System.StrUtils,
+  System.Hash,
+  Vcl.Graphics,
+  Vcl.Imaging.pngimage,
   Vcl.Clipbrd;
 
 { TClipboardWatcher }
 
+const
+  // Escrita do próprio Devbox chega como mudança logo depois; ignora nesse intervalo.
+  COwnWriteMs = 400;
+  // DIB maior que isto (uma tela 8K tem ~130 MB) não vai para o histórico.
+  CMaxDibBytes = 64 * 1024 * 1024;
+
 function AddClipboardFormatListener(hwnd: HWND): BOOL; stdcall; external user32;
 function RemoveClipboardFormatListener(hwnd: HWND): BOOL; stdcall; external user32;
 
-constructor TClipboardWatcher.Create(const AOnText: TProc<string>);
+constructor TClipboardWatcher.Create(const AOnClip: TClipEvent);
 begin
   inherited Create;
-  FOnText := AOnText;
+  FOnClip := AOnClip;
   FWnd := AllocateHWnd(WndProc);
   AddClipboardFormatListener(FWnd);
 end;
@@ -102,52 +131,115 @@ begin
     end;
 end;
 
-{ Lê o texto do clipboard pela API, sem exceção. Outro programa pode estar com
-  ele aberto logo depois de copiar: tenta algumas vezes. }
-function ReadClipboardText(AOwner: HWND; out AText: string; out APrivate: Boolean): Boolean;
+function OpenClipboardRetry(AOwner: HWND): Boolean;
 const
   CTries = 5;
   CWaitMs = 20;
 var
   I: Integer;
-  H: THandle;
-  P: PChar;
 begin
-  Result := False;
-  AText := '';
-  APrivate := False;
   for I := 1 to CTries do
   begin
     if OpenClipboard(AOwner) then
-      Break;
-    if I = CTries then
-      Exit;
+      Exit(True);
     Sleep(CWaitMs);
   end;
+  Result := False;
+end;
+
+function GlobalBytes(H: THandle): TBytes;
+var
+  P: Pointer;
+begin
+  Result := nil;
+  P := GlobalLock(H);
+  if P = nil then
+    Exit;
   try
-    APrivate := ClipboardMarkedPrivate;
-    H := GetClipboardData(CF_UNICODETEXT);
-    if H = 0 then
-      Exit;
-    P := GlobalLock(H);
-    if P = nil then
-      Exit;
-    try
-      AText := P;
-    finally
-      GlobalUnlock(H);
-    end;
-    Result := True;
+    SetLength(Result, GlobalSize(H));
+    Move(P^, Result[0], Length(Result));
   finally
-    CloseClipboard;
+    GlobalUnlock(H);
   end;
+end;
+
+function DroppedFiles(H: THandle): string;
+var
+  I, Count: Integer;
+  Buf: array[0..MAX_PATH * 4] of Char;
+begin
+  Result := '';
+  Count := DragQueryFile(H, $FFFFFFFF, nil, 0);
+  for I := 0 to Count - 1 do
+  begin
+    DragQueryFile(H, I, Buf, Length(Buf));
+    Result := Result + IfThen(Result <> '', #13#10) + Buf;
+  end;
+end;
+
+{ CF_DIB não tem o cabeçalho de arquivo: monta um BMP em memória e converte. }
+function DibToPng(const ADib: TBytes; out AWidth, AHeight: Integer): TBytes;
+var
+  Info: PBitmapInfoHeader;
+  FileHdr: TBitmapFileHeader;
+  Colors, Masks: Integer;
+  Bmp: TBitmap;
+  Png: TPngImage;
+  Src, Dst: TBytesStream;
+begin
+  Result := nil;
+  if Length(ADib) < SizeOf(TBitmapInfoHeader) then
+    Exit;
+  Info := @ADib[0];
+  Colors := Info.biClrUsed;
+  if (Colors = 0) and (Info.biBitCount <= 8) then
+    Colors := 1 shl Info.biBitCount;
+  Masks := 0;
+  if (Info.biCompression = BI_BITFIELDS) and (Info.biSize = SizeOf(TBitmapInfoHeader)) then
+    Masks := 3 * SizeOf(DWORD);
+  FillChar(FileHdr, SizeOf(FileHdr), 0);
+  FileHdr.bfType := $4D42;  // 'BM'
+  FileHdr.bfSize := SizeOf(FileHdr) + Length(ADib);
+  FileHdr.bfOffBits := SizeOf(FileHdr) + Info.biSize + Cardinal(Masks) + Cardinal(Colors) * SizeOf(TRGBQuad);
+  Src := TBytesStream.Create;
+  Bmp := TBitmap.Create;
+  Png := TPngImage.Create;
+  Dst := TBytesStream.Create;
+  try
+    Src.WriteBuffer(FileHdr, SizeOf(FileHdr));
+    Src.WriteBuffer(ADib[0], Length(ADib));
+    Src.Position := 0;
+    Bmp.LoadFromStream(Src);
+    AWidth := Bmp.Width;
+    AHeight := Bmp.Height;
+    Png.Assign(Bmp);
+    Png.SaveToStream(Dst);
+    Result := Copy(Dst.Bytes, 0, Dst.Size);
+  finally
+    Dst.Free;
+    Png.Free;
+    Bmp.Free;
+    Src.Free;
+  end;
+end;
+
+function ShortHash(const ABytes: TBytes): string;
+var
+  H: THashSHA1;
+begin
+  H := THashSHA1.Create;
+  H.Update(ABytes);
+  Result := Copy(H.HashAsString, 1, 8);
 end;
 
 procedure TClipboardWatcher.WndProc(var Message: TMessage);
 const
   WM_CLIPBOARDUPDATE = $031D;
 var
+  Kind: TClipKind;
   Text: string;
+  Data: TBytes;
+  W, H: Integer;
   Private_: Boolean;
 begin
   if Message.Msg <> WM_CLIPBOARDUPDATE then
@@ -155,14 +247,48 @@ begin
     Message.Result := DefWindowProc(FWnd, Message.Msg, Message.WParam, Message.LParam);
     Exit;
   end;
-  if not IsClipboardFormatAvailable(CF_UNICODETEXT) or
-    not ReadClipboardText(FWnd, Text, Private_) then
+  if GetTickCount64 < FIgnoreUntil then
     Exit;
-  if Private_ or (Text = FSkipText) or (Trim(Text) = '') then
+  // Ordem: arquivos, texto, imagem. Excel e navegadores mandam texto e imagem
+  // juntos; nesse caso o texto é o que a pessoa quer.
+  if IsClipboardFormatAvailable(CF_HDROP) then
+    Kind := ckFiles
+  else if IsClipboardFormatAvailable(CF_UNICODETEXT) then
+    Kind := ckText
+  else if IsClipboardFormatAvailable(CF_DIB) then
+    Kind := ckImage
+  else
+    Exit;
+  if not OpenClipboardRetry(FWnd) then
+    Exit;
+  Data := nil;
+  try
+    Private_ := ClipboardMarkedPrivate;
+    case Kind of
+      ckFiles: Text := DroppedFiles(GetClipboardData(CF_HDROP));
+      ckText: Text := string(PChar(GlobalBytes(GetClipboardData(CF_UNICODETEXT))));
+      ckImage: Data := GlobalBytes(GetClipboardData(CF_DIB));
+    end;
+  finally
+    CloseClipboard;
+  end;
+  if Private_ then
     Exit;
   // Exceção solta numa rotina de janela derruba o app: vai para o tratador do VCL.
   try
-    FOnText(Text);
+    if Kind = ckImage then
+    begin
+      if (Data = nil) or (Length(Data) > CMaxDibBytes) then
+        Exit;
+      Data := DibToPng(Data, W, H);
+      if Data = nil then
+        Exit;
+      // O hash entra no texto: duas imagens do mesmo tamanho não viram uma só.
+      Text := Format('Imagem %d×%d · %s', [W, H, ShortHash(Data)]);
+    end
+    else if Trim(Text) = '' then
+      Exit;
+    FOnClip(Kind, Text, Data);
   except
     if Assigned(ApplicationHandleException) then
       ApplicationHandleException(Self)
@@ -171,24 +297,151 @@ begin
   end;
 end;
 
+procedure TClipboardWatcher.Wrote;
+begin
+  FIgnoreUntil := GetTickCount64 + COwnWriteMs;
+end;
+
 procedure TClipboardWatcher.SetText(const AText: string);
 begin
-  FSkipText := AText;
+  Wrote;
   Clipboard.AsText := AText;
+end;
+
+procedure TClipboardWatcher.SetImage(const APng: TBytes);
+var
+  Png: TPngImage;
+  Bmp: TBitmap;
+  S: TBytesStream;
+begin
+  S := TBytesStream.Create(APng);
+  Png := TPngImage.Create;
+  Bmp := TBitmap.Create;
+  try
+    Png.LoadFromStream(S);
+    Bmp.Assign(Png);
+    Wrote;
+    Clipboard.Assign(Bmp);
+  finally
+    Bmp.Free;
+    Png.Free;
+    S.Free;
+  end;
+end;
+
+{ CF_HDROP: DROPFILES seguido dos caminhos, cada um com #0, e um #0 no fim. }
+procedure TClipboardWatcher.SetFiles(const APaths: TArray<string>);
+var
+  List: string;
+  Path: string;
+  Size: NativeUInt;
+  H: HGLOBAL;
+  Drop: PDropFiles;
+begin
+  List := '';
+  for Path in APaths do
+    List := List + Path + #0;
+  List := List + #0;
+  Size := SizeOf(TDropFiles) + NativeUInt(Length(List)) * SizeOf(Char);
+  H := GlobalAlloc(GMEM_MOVEABLE or GMEM_ZEROINIT, Size);
+  if H = 0 then
+    Exit;
+  Drop := GlobalLock(H);
+  Drop.pFiles := SizeOf(TDropFiles);
+  Drop.fWide := True;
+  Move(PChar(List)^, PByte(Drop)[SizeOf(TDropFiles)], Length(List) * SizeOf(Char));
+  GlobalUnlock(H);
+  if not OpenClipboardRetry(FWnd) then
+  begin
+    GlobalFree(H);
+    Exit;
+  end;
+  try
+    Wrote;
+    EmptyClipboard;
+    SetClipboardData(CF_HDROP, H);
+  finally
+    CloseClipboard;
+  end;
+end;
+
+function OcrImage(const APngPath: string; out AText: string): Boolean;
+var
+  Script: string;
+begin
+  Script := ExtractFilePath(ParamStr(0)) + 'ocr.ps1';
+  if not FileExists(Script) then
+  begin
+    AText := 'ocr.ps1 não está ao lado do Devbox.exe';
+    Exit(False);
+  end;
+  // Windows PowerShell 5.1: o pwsh 7 não carrega os tipos WinRT do OCR.
+  Result := RunCapture(Format('powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%s" -Path "%s"',
+    [Script, APngPath]), AText, 30000) = 0;
+  AText := Trim(AText);
+end;
+
+const
+  // Marca nas teclas que o Devbox manda: o gancho do ajudante pula só essas.
+  CDevboxKeyMark = $DE7B0C;
+
+procedure SendKeyInputs(const AKeys: array of Word; const AUp: array of Boolean);
+var
+  Inputs: TArray<TInput>;
+  I: Integer;
+begin
+  SetLength(Inputs, Length(AKeys));
+  for I := 0 to High(AKeys) do
+  begin
+    FillChar(Inputs[I], SizeOf(TInput), 0);
+    Inputs[I].Itype := INPUT_KEYBOARD;
+    Inputs[I].ki.wVk := AKeys[I];
+    Inputs[I].ki.dwExtraInfo := CDevboxKeyMark;
+    if AUp[I] then
+      Inputs[I].ki.dwFlags := KEYEVENTF_KEYUP;
+  end;
+  if Inputs <> nil then
+    SendInput(Length(Inputs), Inputs[0], SizeOf(TInput));
+end;
+
+procedure SendCtrlV;
+begin
+  SendKeyInputs([VK_CONTROL, Ord('V'), Ord('V'), VK_CONTROL], [False, False, True, True]);
+end;
+
+procedure ForceForeground(AWnd: HWND);
+begin
+  SendKeyInputs([VK_MENU, VK_MENU], [False, True]);
+  SetForegroundWindow(AWnd);
 end;
 
 { Processos }
 
 function DecodeOutput(const ABytes: TBytes): string;
+var
+  Oem: TEncoding;
 begin
-  // wsl.exe escreve UTF-16; o resto, UTF-8.
+  // wsl.exe escreve UTF-16; docker e podman, UTF-8; cmd e programas antigos, a
+  // página OEM do console (CP850 no Brasil). UTF-8 inválido cai na OEM.
   if (Length(ABytes) >= 2) and (ABytes[1] = 0) then
-    Result := TEncoding.Unicode.GetString(ABytes)
-  else
+    Exit(TEncoding.Unicode.GetString(ABytes));
+  try
     Result := TEncoding.UTF8.GetString(ABytes);
+  except
+    on EEncodingError do
+    begin
+      Oem := TEncoding.GetEncoding(GetOEMCP);
+      try
+        Result := Oem.GetString(ABytes);
+      finally
+        Oem.Free;
+      end;
+    end;
+  end;
 end;
 
-function RunCapture(const ACmdLine: string; out AOutput: string; ATimeoutMs: Cardinal): Integer;
+function RunCapture(const ACmdLine: string; out AOutput: string; ATimeoutMs: Cardinal;
+  const AWorkDir: string): Integer;
 const
   CChunk = 4096;
 var
@@ -202,6 +455,7 @@ var
   Data: TBytes;
   Start: UInt64;
   Done: Boolean;
+  Dir: PChar;
 begin
   AOutput := '';
   SA.nLength := SizeOf(SA);
@@ -224,7 +478,11 @@ begin
     Cmd := ACmdLine;
     UniqueString(Cmd);
     try
-      if not CreateProcess(nil, PChar(Cmd), nil, nil, True, CREATE_NO_WINDOW, nil, nil, SI, PI) then
+      if AWorkDir = '' then
+        Dir := nil
+      else
+        Dir := PChar(AWorkDir);
+      if not CreateProcess(nil, PChar(Cmd), nil, nil, True, CREATE_NO_WINDOW, nil, Dir, SI, PI) then
         Exit(-1);
     finally
       if NulIn <> INVALID_HANDLE_VALUE then
@@ -389,27 +647,11 @@ begin
 end;
 
 procedure PasteInto(AWnd: HWND);
-var
-  Inputs: array[0..3] of TInput;
-
-  procedure Key(AIndex: Integer; AVk: Word; AUp: Boolean);
-  begin
-    FillChar(Inputs[AIndex], SizeOf(TInput), 0);
-    Inputs[AIndex].Itype := INPUT_KEYBOARD;
-    Inputs[AIndex].ki.wVk := AVk;
-    if AUp then
-      Inputs[AIndex].ki.dwFlags := KEYEVENTF_KEYUP;
-  end;
-
 begin
   if (AWnd = 0) or not IsWindow(AWnd) then
     Exit;
   SetForegroundWindow(AWnd);
-  Key(0, VK_CONTROL, False);
-  Key(1, Ord('V'), False);
-  Key(2, Ord('V'), True);
-  Key(3, VK_CONTROL, True);
-  SendInput(Length(Inputs), Inputs[0], SizeOf(TInput));
+  SendCtrlV;
 end;
 
 procedure OpenUrl(const AUrl: string);

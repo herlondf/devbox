@@ -1,8 +1,8 @@
 <h1 align="center">Devbox</h1>
 
 <p align="center">
-  <b>Clipboard com histórico, snippets e seus serviços locais na bandeja do Windows.</b><br>
-  Win+Alt+B, digite, Enter: o texto cai na janela onde você estava.
+  <b>A caixa de ferramentas do dev na bandeja do Windows.</b><br>
+  Clipboard com histórico, expansor de texto, containers, limpeza, rede, agendador, IA e mais, num app só.
 </p>
 
 <p align="center">
@@ -17,39 +17,55 @@
 
 ---
 
-## O que faz
+## O que tem
 
-- **Histórico do clipboard.** Os últimos 200 textos copiados, com busca. Texto repetido sobe para o topo, sem duplicar.
-- **Snippets.** Fixe o que você usa sempre. Snippet não sai do histórico.
-- **Cola onde você estava.** Win+Alt+B abre a busca de qualquer programa. Enter cola na janela de antes.
-- **Não guarda segredo.** Senha marcada pelo gerenciador de senhas (1Password, Bitwarden, KeePass) fica de fora. Texto com cara de token, chave privada ou JWT também.
-- **Containers.** Docker Desktop no Windows e Podman ou Docker dentro das distros WSL ligadas. Iniciar, parar, reiniciar e ver os logs.
-- **WSL.** Quais distros estão ligadas. Abrir terminal, desligar uma ou desligar o WSL todo.
-- **Portas.** Quem está escutando em cada porta TCP, qual container publica a porta. Abrir no navegador ou encerrar o processo.
+**Dia a dia**
+- **Clipboard:** histórico de texto, imagem e arquivos, com busca e snippets fixos. Win+Alt+B abre de qualquer programa e Enter cola onde você estava.
+- **Conversores:** JSON formatado ou numa linha, Base64, URL, JWT, timestamp, SHA-256, MD5, maiúsculas, ordenar e tirar linhas repetidas, GUID.
+- **Imagem e arquivos copiados:** OCR (texto da imagem pelo próprio Windows), salvar PNG, SHA-256 e zip dos arquivos.
+- **Expansor de texto:** `;atalho` em qualquer programa vira o snippet. Campos `{{nome}}` são perguntados antes de colar. Já vem com `;data`, `;hora`, `;agora`, `;guid` e `;ts`.
+- **Foco e reunião:** clipboard em pausa e avisos guardados para o fim. Liga por 25 ou 50 minutos, até você desligar, ou sozinho quando a câmera ou o microfone estão em uso. Mostra o tempo de foco por dia.
+- **Ferramentas:** captura de tela para bug (seta, retângulo, texto, número de passo e borrar), comparar `.env` com `.env.example` e log ao vivo com erro em vermelho.
 
-## Como usar
+**Ambiente**
+- **Serviços:** containers do Docker no Windows e do Podman ou Docker nas distros WSL ligadas, com iniciar, parar, reiniciar e logs. Distros WSL. Portas em escuta com o processo dono.
+- **Limpeza:** lixo de build de projetos parados (`node_modules`, `bin/obj`, `dcu`, `target`...), temporários e caches, arquivos grandes com gráfico por tipo, pastas vazias, imagens órfãs de container e programas que iniciam com o Windows.
+- **Rede:** monitor de URLs com tempo e vencimento do certificado, aviso de VPN e um receptor de webhook local para testar integrações.
+- **Sistema:** CPU, memória, discos e processos ao vivo. Editor do PATH do usuário que acha pastas que não existem e repetidas.
 
-1. Abra o `Devbox.exe`. Ele fica na bandeja.
-2. Copie textos normalmente. Eles aparecem na aba **Clipboard**.
-3. Em qualquer programa, aperte **Win+Alt+B**, digite parte do texto e aperte **Enter**.
-4. Na aba **Serviços**, escolha a linha e use os botões de cima.
+**Automação**
+- **Ambientes de projeto:** um roteiro de passos liga distro, containers, terminal, editor e navegador num clique.
+- **Comando por IA:** diga o que quer; a IA escreve o comando, você confere e decide se roda.
+- **Agendador:** comandos a cada N minutos, todo dia ou em dias da semana, com histórico e aviso de falha.
+- **Avisos de fim:** avisa quando um processo termina, uma porta fecha ou um container para.
+
+<p align="center">
+  <img src="docs/images/rede.png" width="410" alt="Rede">
+  <img src="docs/images/foco.png" width="410" alt="Foco">
+</p>
+
+## Teclas
 
 | Tecla | Faz |
 |---|---|
 | Win+Alt+B | Abre ou esconde a busca do clipboard |
-| ↑ ↓ | Escolhem o item |
-| Enter | Cola na janela de antes |
+| Win+Alt+S | Captura de tela para bug |
+| ↑ ↓ e Enter | Escolhem e colam na janela de antes |
 | Esc | Esconde a janela |
 
 Fechar a janela só esconde. Para sair, use **Sair** no menu da bandeja.
 
-<p align="center">
-  <img src="docs/images/configuracoes.png" width="620" alt="Configurações do Devbox">
-</p>
+## Privacidade e segurança
 
-## Onde ficam os dados
+- Tudo fica em `%LOCALAPPDATA%\Devbox\devbox.db` (SQLite), só na sua máquina.
+- Senha marcada pelo gerenciador de senhas e texto com cara de token ou chave não entram no histórico.
+- A chave da IA fica no Credential Manager do Windows. O texto só vai para a IA quando você clica.
+- O que apaga ou encerra pede confirmação. Lixo de build sai de vez; arquivos grandes e pastas vazias vão para a Lixeira.
+- O expansor de texto e a captura de tela rodam num exe separado, `DevboxHelper.exe`, que o Devbox abre e fecha junto.
 
-Tudo em `%LOCALAPPDATA%\Devbox\devbox.db` (SQLite), só na sua máquina. Nada vai para a rede.
+## IA
+
+Funciona com a Anthropic (Claude) ou com qualquer endpoint compatível com OpenAI, como Ollama ou um gateway próprio. Configure em **Configurações › IA**.
 
 ## Compilar do código
 
@@ -57,11 +73,11 @@ Tudo em `%LOCALAPPDATA%\Devbox\devbox.db` (SQLite), só na sua máquina. Nada va
 
 Precisa do RAD Studio 12 (Studio 22.0) e da ComponentesUI em `..\Delphi\ComponentesUI`. Para outro lugar, mude a propriedade `CUI` do projeto.
 
-Na IDE: abra `src\Devbox.dproj`. O self-check fica em `tests\DevboxTests.dproj` e termina com `TUDO OK`.
+Na IDE: abra `src\Devbox.dproj` e `src\DevboxHelper.dproj` (os dois saem em `bin\Win32\<config>`). O self-check fica em `tests\DevboxTests.dproj` e termina com `TUDO OK`.
 
 ## Feito com a ComponentesUI
 
-O Devbox é também uma vitrine da suíte. Usa `TUITabs`, `TUIInput`, `TUIFilterChip`, `TUIVirtualList`, `TUICode`, `TUIScrollArea`, `TUIStat`, `TUIDataTable` (com selos coloridos), `TUIProgressBar`, `TUIToggle`, `TUISwap` (tema claro e escuro), `TUIEmptyState` e `TUIToastManager` (com ação de confirmar no próprio aviso).
+O Devbox também é vitrine da suíte. Usa menu lateral (`TUISidebar`), tabelas com selos e minigráficos (`TUIDataTable`), gráficos (`TUIChart`: treemap, barras), `TUIStat`, `TUISparkline`, `TUITimeline`, `TUISteps`, `TUICountdown`, `TUIRadialProgress`, `TUIVirtualList`, `TUICode`, `TUIImage`, `TUIDropdown`, `TUITabs`, `TUIFilterChip`, `TUIToggle`, `TUICheckbox`, `TUISelect`, `TUIInput`, `TUITextArea`, `TUIBadge`, `TUIStatus`, `TUIEmptyState`, `TUISwap` e `TUIToastManager`.
 
 ## Licença
 

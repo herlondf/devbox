@@ -2,6 +2,28 @@
 
 Formato [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
+## [0.2.0] - 2026-10-06
+
+### Adicionado
+- Menu lateral com telas por assunto (Dia a dia, Ambiente, Automação).
+- Clipboard guarda imagem (PNG) e arquivos copiados; OCR do Windows, salvar PNG, SHA-256 e zip.
+- Conversores no clipboard: JSON, Base64, URL, JWT, timestamp, hashes, linhas, GUID.
+- Expansor de texto (`;atalho` em qualquer programa) com campos `{{nome}}` e atalhos prontos.
+- Foco e reunião: pausa clipboard e avisos, liga sozinho com câmera/microfone, minutos de foco por dia.
+- Ferramentas: captura de tela para bug com marcação, comparar `.env`, log ao vivo.
+- Limpeza: lixo de build, temporários e caches, arquivos grandes (treemap), pastas vazias, imagens órfãs, inicialização.
+- Rede: monitor de URLs com certificado, aviso de VPN, receptor de webhook local (porta 4081).
+- Sistema: CPU, memória, discos e processos ao vivo; editor do PATH do usuário com desfazer.
+- Ambientes de projeto, Comando por IA, Agendador e Avisos de fim.
+- IA: Anthropic ou endpoint compatível com OpenAI; chave no Credential Manager.
+- `DevboxHelper.exe`: expansor e captura de tela num exe separado, aberto e fechado pelo Devbox.
+
+### Mudado
+- Uma instância por pasta de dados (antes, por usuário).
+
+### Removido
+- Histórico dos terminais (chegou a existir durante o desenvolvimento): ler o histórico do PowerShell fazia o antivírus apagar o Devbox.exe.
+
 ## [0.1.0] - 2026-10-05
 
 ### Adicionado

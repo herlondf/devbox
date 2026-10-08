@@ -338,7 +338,7 @@ begin
         on E: Exception do
           Engines := Engines + ['erro: ' + E.Message];
       end;
-      System.Classes.TThread.Queue(nil,
+      QueueUI(
         procedure
         begin
           FContainers := Containers;
@@ -490,7 +490,7 @@ begin
       Code: Integer;
     begin
       Code := RunCapture(ACmdLine, Output, 60000);
-      System.Classes.TThread.Queue(nil,
+      QueueUI(
         procedure
         begin
           if Code = 0 then
@@ -546,7 +546,7 @@ begin
       Output: string;
     begin
       RunCapture(Format('%s logs --tail %d %s', [Cli, CLogLines, Id]), Output);
-      System.Classes.TThread.Queue(nil,
+      QueueUI(
         procedure
         const
           CLineHeight = 15;
@@ -610,7 +610,7 @@ begin
           Answer := E.Message;
         end;
       end;
-      System.Classes.TThread.Queue(nil,
+      QueueUI(
         procedure
         begin
           if Ok then

@@ -9,9 +9,26 @@ uses
   System.SysUtils,
   FireDAC.Comp.Client,
   Devbox.Model,
-  Devbox.Jobs;
+  Devbox.Jobs,
+  Devbox.Usage;
 
 type
+  TGoogleAccount = record
+    Email: string;
+    Enabled: Boolean;
+  end;
+  TGoogleAccounts = TArray<TGoogleAccount>;
+
+  { Conta de e-mail por IMAP. A senha de app fica no Credential Manager. }
+  TImapAccount = record
+    Email: string;
+    Host: string;
+    Port: Integer;
+    User: string;
+    Enabled: Boolean;
+  end;
+  TImapAccounts = TArray<TImapAccount>;
+
   TStore = class
   private
     FConn: TFDConnection;
@@ -59,7 +76,24 @@ type
     function ListWatches: TWatches;
     procedure AddWatch(var AWatch: TWatch);
     procedure DeleteWatch(AId: Integer);
+    // Contas Google (o refresh token fica no Credential Manager)
+    function ListGoogleAccounts: TGoogleAccounts;
+    procedure SaveGoogleAccount(const AEmail: string; AEnabled: Boolean);
+    procedure DeleteGoogleAccount(const AEmail: string);
+    function ListImapAccounts: TImapAccounts;
+    procedure SaveImapAccount(const AAccount: TImapAccount);
+    procedure DeleteImapAccount(const AEmail: string);
+    { E-mails que já geraram aviso. False em AFirst = conta sem nenhum ainda. }
+    function MailSeen(const AAccount, AId: string): Boolean;
+    function MailSeenAny(const AAccount: string): Boolean;
+    procedure MarkMailSeen(const AAccount, AId: string);
+    { Uso de IA: grava com o custo pelo preço de agora. }
+    procedure AddUsage(const AUsage: TAiUsage);
+    { Somas por modelo desde AFrom, do mais caro ao mais barato. }
+    function UsageTotals(AFrom: TDateTime): TUsageTotals;
     function GetSetting(const AName: string; const ADefault: string = ''): string;
+    { A mesma conexão serve às issues (Devbox.Issues.Store). Só na thread de UI. }
+    property Connection: TFDConnection read FConn;
     procedure SetSetting(const AName, AValue: string);
   end;
 
@@ -125,6 +159,10 @@ begin
   FConn.DriverName := 'SQLite';
   FConn.Params.Values['Database'] := ADbPath;
   FConn.Params.Values['LockingMode'] := 'Normal';
+  // Devbox e DevboxHelper abrem o mesmo banco: no WAL a leitura de um não trava a escrita do outro
+  // (sem isto, criar tabela na abertura dava "database is locked" com o ajudante lendo).
+  FConn.Params.Values['JournalMode'] := 'WAL';
+  FConn.Params.Values['BusyTimeout'] := '10000';
   FConn.ResourceOptions.SilentMode := True;
   FConn.LoginPrompt := False;
   FConn.Connected := True;
@@ -153,6 +191,16 @@ begin
     'target TEXT NOT NULL, cli TEXT, caption TEXT, created_at REAL NOT NULL)');
   if not HasColumn('clip', 'abbrev') then
     FConn.ExecSQL('ALTER TABLE clip ADD COLUMN abbrev TEXT');
+  FConn.ExecSQL('CREATE TABLE IF NOT EXISTS google_account (email TEXT PRIMARY KEY, ' +
+    'enabled INTEGER NOT NULL DEFAULT 1, added_at REAL NOT NULL)');
+  FConn.ExecSQL('CREATE TABLE IF NOT EXISTS mail_seen (account TEXT NOT NULL, id TEXT NOT NULL, ' +
+    'seen_at REAL NOT NULL, PRIMARY KEY (account, id))');
+  FConn.ExecSQL('CREATE TABLE IF NOT EXISTS imap_account (email TEXT PRIMARY KEY, host TEXT NOT NULL, ' +
+    'port INTEGER NOT NULL, user TEXT, enabled INTEGER NOT NULL DEFAULT 1, added_at REAL NOT NULL)');
+  // Mesmas colunas do Vigia (at, provider, model, input_tokens, output_tokens, cost) e o áudio a mais.
+  FConn.ExecSQL('CREATE TABLE IF NOT EXISTS ai_usage (id INTEGER PRIMARY KEY AUTOINCREMENT, at REAL NOT NULL, ' +
+    'provider TEXT, model TEXT, kind TEXT, input_tokens INTEGER, output_tokens INTEGER, ' +
+    'audio_in_tokens INTEGER, audio_out_tokens INTEGER, audio_seconds REAL, cost REAL)');
 end;
 
 destructor TStore.Destroy;
@@ -533,6 +581,143 @@ end;
 procedure TStore.DeleteWatch(AId: Integer);
 begin
   FConn.ExecSQL('DELETE FROM watch WHERE id = :i', [AId]);
+end;
+
+function HasValue(const V: Variant): Boolean;
+begin
+  Result := not (VarIsNull(V) or VarIsEmpty(V));
+end;
+
+function TStore.ListGoogleAccounts: TGoogleAccounts;
+var
+  Q: TFDQuery;
+  A: TGoogleAccount;
+begin
+  Result := nil;
+  Q := TFDQuery.Create(nil);
+  try
+    Q.Connection := FConn;
+    Q.Open('SELECT email, enabled FROM google_account ORDER BY added_at');
+    while not Q.Eof do
+    begin
+      A.Email := Q.Fields[0].AsString;
+      A.Enabled := Q.Fields[1].AsInteger <> 0;
+      Result := Result + [A];
+      Q.Next;
+    end;
+  finally
+    Q.Free;
+  end;
+end;
+
+procedure TStore.SaveGoogleAccount(const AEmail: string; AEnabled: Boolean);
+begin
+  if FConn.ExecSQL('UPDATE google_account SET enabled = :e WHERE email = :m', [Ord(AEnabled), AEmail]) = 0 then
+    FConn.ExecSQL('INSERT INTO google_account (email, enabled, added_at) VALUES (:m, :e, :d)',
+      [AEmail, Ord(AEnabled), Double(Now)]);
+end;
+
+procedure TStore.DeleteGoogleAccount(const AEmail: string);
+begin
+  FConn.ExecSQL('DELETE FROM google_account WHERE email = :m', [AEmail]);
+  FConn.ExecSQL('DELETE FROM mail_seen WHERE account = :m', [AEmail]);
+end;
+
+function TStore.ListImapAccounts: TImapAccounts;
+var
+  Q: TFDQuery;
+  A: TImapAccount;
+begin
+  Result := nil;
+  Q := TFDQuery.Create(nil);
+  try
+    Q.Connection := FConn;
+    Q.Open('SELECT email, host, port, user, enabled FROM imap_account ORDER BY added_at');
+    while not Q.Eof do
+    begin
+      A.Email := Q.Fields[0].AsString;
+      A.Host := Q.Fields[1].AsString;
+      A.Port := Q.Fields[2].AsInteger;
+      A.User := Q.Fields[3].AsString;
+      A.Enabled := Q.Fields[4].AsInteger <> 0;
+      Result := Result + [A];
+      Q.Next;
+    end;
+  finally
+    Q.Free;
+  end;
+end;
+
+procedure TStore.SaveImapAccount(const AAccount: TImapAccount);
+begin
+  if FConn.ExecSQL('UPDATE imap_account SET host = :h, port = :p, user = :u, enabled = :e WHERE email = :m',
+    [AAccount.Host, AAccount.Port, AAccount.User, Ord(AAccount.Enabled), AAccount.Email]) = 0 then
+    FConn.ExecSQL('INSERT INTO imap_account (email, host, port, user, enabled, added_at) ' +
+      'VALUES (:m, :h, :p, :u, :e, :d)', [AAccount.Email, AAccount.Host, AAccount.Port, AAccount.User,
+      Ord(AAccount.Enabled), Double(Now)]);
+end;
+
+procedure TStore.DeleteImapAccount(const AEmail: string);
+begin
+  FConn.ExecSQL('DELETE FROM imap_account WHERE email = :m', [AEmail]);
+  FConn.ExecSQL('DELETE FROM mail_seen WHERE account = :m', [AEmail]);
+end;
+
+function TStore.MailSeen(const AAccount, AId: string): Boolean;
+begin
+  Result := HasValue(FConn.ExecSQLScalar('SELECT 1 FROM mail_seen WHERE account = :a AND id = :i',
+    [AAccount, AId]));
+end;
+
+function TStore.MailSeenAny(const AAccount: string): Boolean;
+begin
+  Result := HasValue(FConn.ExecSQLScalar('SELECT 1 FROM mail_seen WHERE account = :a LIMIT 1', [AAccount]));
+end;
+
+procedure TStore.MarkMailSeen(const AAccount, AId: string);
+begin
+  FConn.ExecSQL('INSERT OR IGNORE INTO mail_seen (account, id, seen_at) VALUES (:a, :i, :d)',
+    [AAccount, AId, Double(Now)]);
+  // Guarda só o último mês: o Gmail não devolve nada mais velho na busca do aviso.
+  FConn.ExecSQL('DELETE FROM mail_seen WHERE seen_at < :d', [Double(Now - 30)]);
+end;
+
+procedure TStore.AddUsage(const AUsage: TAiUsage);
+begin
+  FConn.ExecSQL('INSERT INTO ai_usage (at, provider, model, kind, input_tokens, output_tokens, audio_in_tokens, ' +
+    'audio_out_tokens, audio_seconds, cost) VALUES (:at, :p, :m, :k, :i, :o, :ai, :ao, :s, :c)',
+    [Double(AUsage.At), AUsage.Provider, AUsage.Model, AUsage.Kind, AUsage.InputTokens, AUsage.OutputTokens,
+    AUsage.AudioInTokens, AUsage.AudioOutTokens, AUsage.AudioSeconds,
+    UsageCost(AUsage, PriceFor(AUsage.Model))]);
+end;
+
+function TStore.UsageTotals(AFrom: TDateTime): TUsageTotals;
+var
+  Q: TFDQuery;
+  T: TUsageTotal;
+begin
+  Result := nil;
+  Q := TFDQuery.Create(nil);
+  try
+    Q.Connection := FConn;
+    Q.Open('SELECT model, COUNT(*), SUM(input_tokens), SUM(output_tokens), ' +
+      'SUM(COALESCE(audio_in_tokens, 0) + COALESCE(audio_out_tokens, 0)), SUM(COALESCE(audio_seconds, 0)), ' +
+      'SUM(cost) FROM ai_usage WHERE at >= :f GROUP BY model ORDER BY SUM(cost) DESC', [Double(AFrom)]);
+    while not Q.Eof do
+    begin
+      T.Model := Q.Fields[0].AsString;
+      T.Calls := Q.Fields[1].AsInteger;
+      T.InputTokens := Q.Fields[2].AsLargeInt;
+      T.OutputTokens := Q.Fields[3].AsLargeInt;
+      T.AudioTokens := Q.Fields[4].AsLargeInt;
+      T.AudioSeconds := Q.Fields[5].AsFloat;
+      T.Cost := Q.Fields[6].AsFloat;
+      Result := Result + [T];
+      Q.Next;
+    end;
+  finally
+    Q.Free;
+  end;
 end;
 
 function TStore.GetSetting(const AName, ADefault: string): string;

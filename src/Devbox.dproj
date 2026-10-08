@@ -1,11 +1,11 @@
-﻿<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <PropertyGroup>
     <ProjectGuid>{9A359B56-2B76-41D8-A249-88F924F53B69}</ProjectGuid>
     <MainSource>Devbox.dpr</MainSource>
     <Base>True</Base>
     <Config Condition="'$(Config)'==''">Debug</Config>
     <Platform Condition="'$(Platform)'==''">Win32</Platform>
-    <TargetedPlatforms>1</TargetedPlatforms>
+    <TargetedPlatforms>3</TargetedPlatforms>
     <AppType>Application</AppType>
     <FrameworkType>VCL</FrameworkType>
     <ProjectVersion>19.2</ProjectVersion>
@@ -22,13 +22,15 @@
     <Base_Win64>true</Base_Win64>
     <CfgParent>Base</CfgParent>
     <Base>true</Base>
+      <DCC_MapFile>3</DCC_MapFile>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Base)'!=''">
+    <PreBuildEvent>powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\tools\google-client.ps1" -Out "$(ProjectDir)..\dcu\gen\Devbox.GoogleClient.inc"</PreBuildEvent>
     <CUI Condition="'$(CUI)'==''">..\..\Delphi\ComponentesUI</CUI>
     <DCC_CodePage>65001</DCC_CodePage>
     <SanitizedProjectName>Devbox</SanitizedProjectName>
     <DCC_Namespace>Vcl;Vcl.Imaging;Winapi;System.Win;Data.Win;System;Data;$(DCC_Namespace)</DCC_Namespace>
-    <DCC_UnitSearchPath>$(CUI)\src;$(CUI)\src\core;$(CUI)\src\components\basic;$(CUI)\src\components\feedback;$(CUI)\src\components\layout;$(CUI)\src\components\data;$(CUI)\src\components\form;$(CUI)\src\components\display;$(CUI)\src\components\overlay;$(CUI)\src\components\nav;$(CUI)\src\components\report;$(CUI)\src\components\assistant;$(CUI)\thirdpart\skia4delphi\Source;$(CUI)\thirdpart\skia4delphi\Source\VCL;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>
+    <DCC_UnitSearchPath>..\dcu\gen;$(CUI)\src;$(CUI)\src\core;$(CUI)\src\components\basic;$(CUI)\src\components\feedback;$(CUI)\src\components\layout;$(CUI)\src\components\data;$(CUI)\src\components\form;$(CUI)\src\components\display;$(CUI)\src\components\overlay;$(CUI)\src\components\nav;$(CUI)\src\components\report;$(CUI)\src\components\assistant;$(CUI)\thirdpart\skia4delphi\Source;$(CUI)\thirdpart\skia4delphi\Source\VCL;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>
     <DCC_DcuOutput>..\dcu\$(Platform)\$(Config)</DCC_DcuOutput>
     <DCC_ExeOutput>..\bin\$(Platform)\$(Config)</DCC_ExeOutput>
     <Manifest_File>$(BDS)\bin\default_app.manifest</Manifest_File>
@@ -36,6 +38,9 @@
   </PropertyGroup>
   <PropertyGroup Condition="'$(Base_Win32)'!=''">
     <PostBuildEvent>copy /Y "$(CUI)\tests\bin\Win32\Debug\sk4d.dll" "$(ProjectDir)..\bin\Win32\$(Config)\"&amp;&amp; copy /Y "$(ProjectDir)ocr.ps1" "$(ProjectDir)..\bin\Win32\$(Config)\"</PostBuildEvent>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Base_Win64)'!=''">
+    <PostBuildEvent>copy /Y "$(CUI)\tests\bin\Win64\Debug\sk4d.dll" "$(ProjectDir)..\bin\Win64\$(Config)\"&amp;&amp; copy /Y "$(ProjectDir)ocr.ps1" "$(ProjectDir)..\bin\Win64\$(Config)\"&amp;&amp; xcopy /Y /I /Q "$(ProjectDir)..\assets\assistant\*.json" "$(ProjectDir)..\bin\Win64\$(Config)\assets\assistant\"</PostBuildEvent>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Config)'=='Debug' or '$(Cfg_1)'!=''">
     <Cfg_1>true</Cfg_1>
@@ -90,6 +95,45 @@
     <DCCReference Include="Devbox.UI.Jobs.pas"/>
     <DCCReference Include="Devbox.UI.Watches.pas"/>
     <DCCReference Include="Devbox.UI.Settings.pas"/>
+    <DCCReference Include="Devbox.UI.AISettings.pas"/>
+    <DCCReference Include="Devbox.Google.pas"/>
+    <DCCReference Include="Devbox.ICal.pas"/>
+    <DCCReference Include="Devbox.Tls.pas"/>
+    <DCCReference Include="Devbox.Imap.pas"/>
+    <DCCReference Include="Devbox.MailSource.pas"/>
+    <DCCReference Include="Devbox.Whisper.pas"/>
+    <DCCReference Include="Devbox.I18n.En.pas"/>
+    <DCCReference Include="Devbox.I18n.pas"/>
+    <DCCReference Include="Devbox.Issues.Model.pas"/>
+    <DCCReference Include="Devbox.Issues.Providers.pas"/>
+    <DCCReference Include="Devbox.Issues.Diff.pas"/>
+    <DCCReference Include="Devbox.Issues.Store.pas"/>
+    <DCCReference Include="Devbox.Issues.TrayIcon.pas"/>
+    <DCCReference Include="Devbox.Issues.AI.pas"/>
+    <DCCReference Include="Devbox.Issues.Backup.pas"/>
+    <DCCReference Include="Devbox.Issues.Update.pas"/>
+    <DCCReference Include="Devbox.Issues.UI.Common.pas"/>
+    <DCCReference Include="Devbox.Issues.UI.Notify.pas"/>
+    <DCCReference Include="Devbox.Issues.UI.Status.pas"/>
+    <DCCReference Include="Devbox.Issues.UI.Tags.pas"/>
+    <DCCReference Include="Devbox.Issues.UI.Account.pas"/>
+    <DCCReference Include="Devbox.Issues.UI.Detail.pas"/>
+    <DCCReference Include="Devbox.Issues.UI.Views.pas"/>
+    <DCCReference Include="Devbox.Issues.UI.Mini.pas"/>
+    <DCCReference Include="Devbox.Issues.UI.Main.pas"/>
+    <DCCReference Include="Devbox.Usage.pas"/>
+    <DCCReference Include="Devbox.WebRtcAec.pas"/>
+    <DCCReference Include="Devbox.WebSocket.pas"/>
+    <DCCReference Include="Devbox.Realtime.pas"/>
+    <DCCReference Include="Devbox.Speech.pas"/>
+    <DCCReference Include="Devbox.Vosk.pas"/>
+    <DCCReference Include="Devbox.Voice.pas"/>
+    <DCCReference Include="Devbox.Voice.Agent.pas"/>
+    <DCCReference Include="Devbox.UI.Voice.pas"/>
+    <DCCReference Include="Devbox.UI.Google.pas"/>
+    <DCCReference Include="Devbox.UI.Mail.pas"/>
+    <DCCReference Include="Devbox.UI.Agenda.pas"/>
+    <DCCReference Include="Devbox.UI.Digest.pas"/>
     <DCCReference Include="Devbox.UI.Main.pas"/>
     <BuildConfiguration Include="Base">
       <Key>Base</Key>

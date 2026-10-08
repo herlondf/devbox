@@ -300,7 +300,7 @@ begin
         Output := 'Não deu para iniciar o comando';
       if Code = -2 then
         Output := Output + #13#10'(parado: passou de 30 minutos)';
-      System.Classes.TThread.Queue(nil,
+      QueueUI(
         procedure
         var
           Run: TJobRun;

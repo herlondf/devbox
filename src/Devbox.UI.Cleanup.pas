@@ -433,7 +433,7 @@ begin
   if GetTickCount64 - FLastStatus < CStatusEveryMs then
     Exit;
   FLastStatus := GetTickCount64;
-  System.Classes.TThread.Queue(nil,
+  QueueUI(
     procedure
     begin
       if FBusy then
@@ -471,7 +471,7 @@ begin
         on E: Exception do
           Error := E.Message;
       end;
-      System.Classes.TThread.Queue(nil,
+      QueueUI(
         procedure
         begin
           SetBusy(False);
@@ -538,7 +538,7 @@ begin
       Failed: Integer;
     begin
       Failed := DeletePaths(Paths, ARecycle, Freed);
-      System.Classes.TThread.Queue(nil,
+      QueueUI(
         procedure
         begin
           SetBusy(False);

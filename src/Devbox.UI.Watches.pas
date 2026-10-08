@@ -312,7 +312,7 @@ begin
         on E: Exception do
           Gone := nil;
       end;
-      System.Classes.TThread.Queue(nil,
+      QueueUI(
         procedure
         var
           G: TWatch;

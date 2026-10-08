@@ -24,11 +24,12 @@
     <Base>true</Base>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Base)'!=''">
+    <PreBuildEvent>powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\tools\google-client.ps1" -Out "$(ProjectDir)..\dcu\gen\Devbox.GoogleClient.inc"</PreBuildEvent>
     <CUI Condition="'$(CUI)'==''">..\..\Delphi\ComponentesUI</CUI>
     <DCC_CodePage>65001</DCC_CodePage>
     <SanitizedProjectName>DevboxTests</SanitizedProjectName>
     <DCC_Namespace>Vcl;Vcl.Imaging;Winapi;System.Win;Data.Win;System;Data;$(DCC_Namespace)</DCC_Namespace>
-    <DCC_UnitSearchPath>$(CUI)\src;$(CUI)\src\core;$(CUI)\src\components\basic;$(CUI)\src\components\feedback;$(CUI)\src\components\layout;$(CUI)\src\components\data;$(CUI)\src\components\form;$(CUI)\src\components\display;$(CUI)\src\components\overlay;$(CUI)\src\components\nav;$(CUI)\src\components\report;$(CUI)\thirdpart\skia4delphi\Source;$(CUI)\thirdpart\skia4delphi\Source\VCL;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>
+    <DCC_UnitSearchPath>..\dcu\gen;$(CUI)\src;$(CUI)\src\core;$(CUI)\src\components\basic;$(CUI)\src\components\feedback;$(CUI)\src\components\layout;$(CUI)\src\components\data;$(CUI)\src\components\form;$(CUI)\src\components\display;$(CUI)\src\components\overlay;$(CUI)\src\components\nav;$(CUI)\src\components\report;$(CUI)\thirdpart\skia4delphi\Source;$(CUI)\thirdpart\skia4delphi\Source\VCL;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>
     <DCC_DcuOutput>..\dcu\tests\$(Platform)\$(Config)</DCC_DcuOutput>
     <DCC_ExeOutput>..\bin\tests\$(Platform)\$(Config)</DCC_ExeOutput>
     <Manifest_File>$(BDS)\bin\default_app.manifest</Manifest_File>

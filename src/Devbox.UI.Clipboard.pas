@@ -591,7 +591,7 @@ begin
           Answer := E.Message;
         end;
       end;
-      System.Classes.TThread.Queue(nil,
+      QueueUI(
         procedure
         begin
           if Ok then
@@ -665,7 +665,7 @@ begin
       Ok: Boolean;
     begin
       Ok := OcrImage(Path, Text);
-      System.Classes.TThread.Queue(nil,
+      QueueUI(
         procedure
         begin
           if Ok and (Text <> '') then
@@ -704,7 +704,7 @@ begin
       for F in Files do
         if TFile.Exists(F) then
           Output := Output + THashSHA2.GetHashStringFromFile(F) + '  ' + ExtractFileName(F) + #13#10;
-      System.Classes.TThread.Queue(nil,
+      QueueUI(
         procedure
         begin
           if Output = '' then
@@ -760,7 +760,7 @@ begin
       finally
         Zip.Free;
       end;
-      System.Classes.TThread.Queue(nil,
+      QueueUI(
         procedure
         begin
           if Error <> '' then

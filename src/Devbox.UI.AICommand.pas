@@ -137,7 +137,7 @@ begin
           Answer := E.Message;
         end;
       end;
-      System.Classes.TThread.Queue(nil,
+      QueueUI(
         procedure
         var
           Shell, Cmd, Expl: string;
@@ -209,7 +209,7 @@ begin
           Output := E.Message;
         end;
       end;
-      System.Classes.TThread.Queue(nil,
+      QueueUI(
         procedure
         begin
           FProgress.Visible := False;

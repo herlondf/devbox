@@ -295,7 +295,7 @@ begin
       Hit: TWebhookHit;
     begin
       Hit := AHit;
-      System.Classes.TThread.Queue(nil,
+      QueueUI(
         procedure
         begin
           HookHit(Hit);
@@ -439,7 +439,7 @@ begin
           R.Error := E.Message;
         end;
       end;
-      System.Classes.TThread.Queue(nil,
+      QueueUI(
         procedure
         begin
           UrlChecked(Check, R);
@@ -584,7 +584,7 @@ begin
         on E: Exception do
           Why := E.Message;
       end;
-      System.Classes.TThread.Queue(nil,
+      QueueUI(
         procedure
         begin
           FVpnBusy := False;

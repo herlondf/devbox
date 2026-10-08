@@ -7,8 +7,11 @@ uses
   System.SysUtils,
   System.DateUtils,
   System.IOUtils,
+  System.Math,
   System.StrUtils,
   System.Generics.Collections,
+  System.JSON,
+  FireDAC.Comp.Client,
   Devbox.Model in '..\src\Devbox.Model.pas',
   Devbox.Sys in '..\src\Devbox.Sys.pas',
   Devbox.Convert in '..\src\Devbox.Convert.pas',
@@ -19,8 +22,30 @@ uses
   Devbox.Tools in '..\src\Devbox.Tools.pas',
   Devbox.Store in '..\src\Devbox.Store.pas',
   Devbox.Secrets in '..\src\Devbox.Secrets.pas',
+  Devbox.I18n.En in '..\src\Devbox.I18n.En.pas',
+  Devbox.I18n in '..\src\Devbox.I18n.pas',
+  Devbox.Issues.Model in '..\src\Devbox.Issues.Model.pas',
+  Devbox.Issues.Providers in '..\src\Devbox.Issues.Providers.pas',
+  Devbox.Issues.Diff in '..\src\Devbox.Issues.Diff.pas',
+  Devbox.Issues.Store in '..\src\Devbox.Issues.Store.pas',
+  Devbox.Usage in '..\src\Devbox.Usage.pas',
   Devbox.AI in '..\src\Devbox.AI.pas',
-  Devbox.SysInfo in '..\src\Devbox.SysInfo.pas';
+  Devbox.SysInfo in '..\src\Devbox.SysInfo.pas',
+  Devbox.Google in '..\src\Devbox.Google.pas',
+  Devbox.ICal in '..\src\Devbox.ICal.pas',
+  Devbox.Tls in '..\src\Devbox.Tls.pas',
+  Devbox.Imap in '..\src\Devbox.Imap.pas',
+  Devbox.Whisper in '..\src\Devbox.Whisper.pas',
+  Devbox.Vosk in '..\src\Devbox.Vosk.pas',
+  Devbox.Voice in '..\src\Devbox.Voice.pas',
+  Devbox.MailSource in '..\src\Devbox.MailSource.pas',
+  Devbox.Voice.Agent in '..\src\Devbox.Voice.Agent.pas',
+  System.SyncObjs,
+  UI.Audio.Capture,
+  Devbox.Speech in '..\src\Devbox.Speech.pas',
+  Devbox.WebRtcAec in '..\src\Devbox.WebRtcAec.pas',
+  Devbox.WebSocket in '..\src\Devbox.WebSocket.pas',
+  Devbox.Realtime in '..\src\Devbox.Realtime.pas';
 
 var
   Failures: Integer;
@@ -370,6 +395,394 @@ begin
   Check(C.Ready, 'IA: compatível sem chave, com endereço, está pronta');
 end;
 
+procedure TestICal;
+const
+  CRLF = #13#10;
+var
+  Ev: TCalEvents;
+  E: TCalEvent;
+  Titles: string;
+  Daily, Moved, Feriado, Longa: TCalEvent;
+begin
+  Ev := ParseICal('BEGIN:VCALENDAR' + CRLF +
+    'BEGIN:VEVENT' + CRLF + 'UID:a' + CRLF + 'DTSTART:20261005T120000Z' + CRLF + 'DTEND:20261005T121500Z' + CRLF +
+    'RRULE:FREQ=WEEKLY;BYDAY=MO,WE;COUNT=4' + CRLF + 'EXDATE:20261007T120000Z' + CRLF +
+    'SUMMARY:Daily\, time' + CRLF + 'DESCRIPTION:Entrar: https://meet.google.com/abc-defg-hij\nObrigado' + CRLF +
+    'END:VEVENT' + CRLF +
+    'BEGIN:VEVENT' + CRLF + 'UID:a' + CRLF + 'RECURRENCE-ID:20261012T120000Z' + CRLF +
+    'DTSTART:20261012T150000Z' + CRLF + 'DTEND:20261012T151500Z' + CRLF + 'SUMMARY:Daily movida' + CRLF +
+    'END:VEVENT' + CRLF +
+    'BEGIN:VEVENT' + CRLF + 'UID:b' + CRLF + 'DTSTART;VALUE=DATE:20261009' + CRLF + 'DTEND;VALUE=DATE:20261010' + CRLF +
+    'SUMMARY:Feriado' + CRLF + 'END:VEVENT' + CRLF +
+    'BEGIN:VEVENT' + CRLF + 'UID:c' + CRLF + 'DTSTART:20261008T100000' + CRLF + 'DURATION:PT1H30M' + CRLF +
+    'SUMMARY:Long' + CRLF + ' a linha dobrada' + CRLF + 'END:VEVENT' + CRLF +
+    'BEGIN:VEVENT' + CRLF + 'UID:d' + CRLF + 'STATUS:CANCELLED' + CRLF + 'DTSTART:20261008T100000' + CRLF +
+    'SUMMARY:x' + CRLF + 'END:VEVENT' + CRLF + 'END:VCALENDAR', EncodeDate(2026, 10, 1), EncodeDate(2026, 11, 1));
+  Titles := '';
+  Daily := Default(TCalEvent);
+  Moved := Daily;
+  Feriado := Daily;
+  Longa := Daily;
+  for E in Ev do
+  begin
+    Titles := Titles + E.Title + ';';
+    if (E.Title = 'Daily, time') and (Daily.Title = '') then Daily := E;
+    if E.Title = 'Daily movida' then Moved := E;
+    if E.Title = 'Feriado' then Feriado := E;
+    if E.Title = 'Longa linha dobrada' then Longa := E;
+  end;
+  Check(Length(Ev) = 5, 'ical: 5 eventos (repetição, exceção, movida, cancelado) ' + Titles);
+  Check(Daily.MeetUrl = 'https://meet.google.com/abc-defg-hij', 'ical: link do Meet na descrição');
+  Check(Daily.Start = TTimeZone.Local.ToLocalTime(EncodeDateTime(2026, 10, 5, 12, 0, 0, 0)), 'ical: hora UTC vira local');
+  Check(Moved.Start = TTimeZone.Local.ToLocalTime(EncodeDateTime(2026, 10, 12, 15, 0, 0, 0)), 'ical: ocorrência movida');
+  Check(Feriado.AllDay and (Feriado.Start = EncodeDate(2026, 10, 9)), 'ical: dia todo');
+  Check(MinutesBetween(Longa.Start, Longa.Finish) = 90, 'ical: DURATION e linha dobrada');
+end;
+
+procedure TestImap;
+const
+  CRLF = #13#10;
+var
+  M: TMailMsg;
+  F, S: string;
+begin
+  Check(MUtf7Encode('Relatórios') = 'Relat&APM-rios', 'imap: pasta com acento em UTF-7');
+  Check(MUtf7Decode('Relat&APM-rios') = 'Relatórios', 'imap: UTF-7 de volta');
+  Check((MUtf7Encode('P&D') = 'P&-D') and (MUtf7Decode('P&-D') = 'P&D'), 'imap: & na pasta');
+  Check(ImapQuote('a"b\c') = '"a\"b\\c"', 'imap: aspas e barra');
+  Check(ParseImapDate('06-Oct-2026 13:00:00 +0000') = TTimeZone.Local.ToLocalTime(EncodeDateTime(2026, 10, 6, 13, 0, 0, 0)),
+    'imap: INTERNALDATE para hora local');
+  ParseHeaderFields('From: =?UTF-8?B?Sm/Do28gU2lsdmE=?= <joao@ex.com>' + CRLF + 'Subject: =?UTF-8?Q?Reuni=C3=A3o?=' + CRLF +
+    ' amanha' + CRLF, F, S);
+  Check((F = 'João Silva <joao@ex.com>') and (S = 'Reunião amanha'), 'imap: cabeçalho codificado e dobrado: ' + F + ' / ' + S);
+  Check(ParseRawMail(TEncoding.UTF8.GetBytes(
+    'From: =?UTF-8?B?Sm/Do28gU2lsdmE=?= <joao@ex.com>' + CRLF +
+    'Subject: =?UTF-8?Q?Reuni=C3=A3o_amanh=C3=A3?=' + CRLF +
+    'Date: Tue, 06 Oct 2026 10:00:00 -0300' + CRLF + 'MIME-Version: 1.0' + CRLF +
+    'Content-Type: multipart/alternative; boundary="b1"' + CRLF + CRLF +
+    '--b1' + CRLF + 'Content-Type: text/plain; charset=UTF-8' + CRLF +
+    'Content-Transfer-Encoding: quoted-printable' + CRLF + CRLF + 'Ol=C3=A1, tudo bem?' + CRLF + 'Linha 2' + CRLF +
+    '--b1' + CRLF + 'Content-Type: text/html; charset=UTF-8' + CRLF + CRLF + '<p>Ol&aacute;</p>' + CRLF +
+    '--b1--' + CRLF), M), 'imap: e-mail multipart lido');
+  Check((M.Subject = 'Reunião amanhã') and (M.FromName = 'João Silva') and (M.FromEmail = 'joao@ex.com'),
+    'imap: assunto e remetente: ' + M.Subject + ' / ' + M.FromName + ' / ' + M.FromEmail);
+  Check(M.Body = 'Olá, tudo bem?'#10'Linha 2', 'imap: corpo quoted-printable: ' + M.Body.Replace(#10, '|'));
+end;
+
+{ DevboxTests -tls host porta: aperto de mão TLS real e CAPABILITY (sem login). }
+procedure RunTlsProbe;
+var
+  T: TTlsSocket;
+begin
+  T := TTlsSocket.Create;
+  try
+    T.Connect(ParamStr(2), StrToInt(ParamStr(3)), True);
+    Writeln('saudação: ', T.ReadLine);
+    T.SendText('a1 CAPABILITY'#13#10);
+    Writeln(T.ReadLine);
+    Writeln(T.ReadLine);
+    T.SendText('a2 LOGIN "naoexiste@exemplo.com" "senhaerrada"'#13#10);
+    Writeln(T.ReadLine);
+  finally
+    T.Free;
+  end;
+end;
+
+{ DevboxTests -vosk arquivo.wav "frase": o que o Vosk ouviu, se bate com a frase e quanto levou. }
+procedure RunVoskProbe;
+var
+  LBytes: TBytes;
+  LSamples: TArray<SmallInt>;
+  LText, LRest, LError: string;
+  LStart: UInt64;
+begin
+  if not VoskLoad(LError) then
+  begin
+    Writeln('vosk: ', LError);
+    Exit;
+  end;
+  Writeln('fora do vocabulário: "', VoskMissingWords(ParamStr(3)), '"');
+  LBytes := TFile.ReadAllBytes(ParamStr(2));
+  SetLength(LSamples, (Length(LBytes) - 44) div 2);
+  Move(LBytes[44], LSamples[0], Length(LSamples) * 2);
+  LSamples := Copy(LSamples, 0, 2200 * 16);
+  LStart := GetTickCount64;
+  VoskHear(LSamples, ParamStr(3), LText);
+  Writeln(Format('ouviu "%s" em %d ms; frase: %s', [LText, GetTickCount64 - LStart,
+    BoolToStr(WakeMatch(LText, ParamStr(3), VoiceDefaultSimilarity, LRest), True)]));
+end;
+
+{ DevboxTests -echo pasta: toca uma frase nas caixas e grava o microfone cru e,
+  ao mesmo tempo, passado pelo WebRTC (eco-0 cru, eco-1 com cancelamento, eco-ref o
+  que tocou). Toca som: só com o usuário sabendo. }
+procedure RunEchoTest;
+const
+  CText = 'Esta é a voz do Devbox testando o eco. Se o assistente entender esta frase, o cancelamento falhou.';
+  CBaselineMs = 1500;
+  CTailMs = 700;
+var
+  LPcm, LRaw, LClean: TArray<SmallInt>;
+  LError: string;
+  LPlayer: TPcmPlayer;
+  LLock: TCriticalSection;
+  LCapture: TUIAudioCapture;
+  LAec: TWebRtcAec;
+begin
+  if not Synthesize(CText, LPcm, LError) then
+  begin
+    Writeln('voz: ', LError);
+    Exit;
+  end;
+  TFile.WriteAllBytes(TPath.Combine(ParamStr(2), 'eco-ref.wav'), PcmToWav(LPcm));
+  LAec := TWebRtcAec.Create;
+  LLock := TCriticalSection.Create;
+  LPlayer := TPcmPlayer.Create;
+  LCapture := TUIAudioCapture.Create;
+  try
+    if not LAec.Open(LError) then
+    begin
+      Writeln(LError);
+      Exit;
+    end;
+    LCapture.OnSamples :=
+      procedure(const ASamples: TArray<SmallInt>)
+      begin
+        LLock.Enter;
+        try
+          LRaw := LRaw + ASamples;
+          LClean := LClean + LAec.Process(ASamples, AecReference.Take);
+        finally
+          LLock.Leave;
+        end;
+      end;
+    if not LCapture.Start(LError) then
+    begin
+      Writeln('microfone: ', LError);
+      Exit;
+    end;
+    Sleep(CBaselineMs);
+    LPlayer.Play(LPcm);
+    while LPlayer.Playing do
+      Sleep(50);
+    Sleep(CTailMs);
+    FreeAndNil(LCapture);
+    TFile.WriteAllBytes(TPath.Combine(ParamStr(2), 'eco-0.wav'), PcmToWav(LRaw));
+    TFile.WriteAllBytes(TPath.Combine(ParamStr(2), 'eco-1.wav'), PcmToWav(LClean));
+    Writeln(Format('gravado: %.1f s cru, %.1f s com cancelamento', [Length(LRaw) / 16000, Length(LClean) / 16000]));
+  finally
+    LCapture.Free;
+    LPlayer.Free;
+    LLock.Free;
+    LAec.Free;
+  end;
+end;
+
+function ReadWav(const APath: string): TArray<SmallInt>;
+var
+  LBytes: TBytes;
+begin
+  LBytes := TFile.ReadAllBytes(APath);
+  SetLength(Result, (Length(LBytes) - 44) div 2);
+  Move(LBytes[44], Result[0], Length(Result) * 2);
+end;
+
+{ DevboxTests -aecfile mic.wav tocado.wav saida.wav inicio_ms: o WebRTC sem tocar som, com a
+  gravação do microfone e o que tocou começando em inicio_ms. }
+procedure RunAecFile;
+const
+  CBlock = 640;
+var
+  LMic, LRef, LOut, LRender: TArray<SmallInt>;
+  LAec: TWebRtcAec;
+  LError: string;
+  LPos, LStart: Integer;
+begin
+  LMic := ReadWav(ParamStr(2));
+  LRef := ReadWav(ParamStr(3));
+  LStart := StrToIntDef(ParamStr(5), 0) * 16;
+  LAec := TWebRtcAec.Create;
+  try
+    if not LAec.Open(LError) then
+    begin
+      Writeln(LError);
+      Exit;
+    end;
+    LPos := 0;
+    while LPos < Length(LMic) do
+    begin
+      if (LPos + CBlock > LStart) and (LPos - LStart < Length(LRef)) then
+        LRender := Copy(LRef, Max(LPos - LStart, 0), CBlock - Max(LStart - LPos, 0))
+      else
+        LRender := nil;
+      LOut := LOut + LAec.Process(Copy(LMic, LPos, CBlock), LRender);
+      Inc(LPos, CBlock);
+    end;
+    TFile.WriteAllBytes(ParamStr(4), PcmToWav(LOut));
+    Writeln(Format('ok: %.1f s', [Length(LOut) / 16000]));
+  finally
+    LAec.Free;
+  end;
+end;
+
+{$I IssuesTests.inc}
+
+procedure TestUsage;
+var
+  LPrice: TAiPrice;
+  LUsage: TAiUsage;
+begin
+  Check(ParsePrice('32;64', LPrice) and (LPrice.Input = 32) and (LPrice.Output = 64) and (LPrice.PerMinute = 0),
+    'custo: preço do Vigia (entrada;saída)');
+  Check(ParsePrice(PriceText(LPrice), LPrice) and (LPrice.Output = 64), 'custo: preço ida e volta');
+  Check(not ParsePrice('', LPrice), 'custo: preço vazio');
+  LPrice := Default(TAiPrice);
+  LPrice.Input := 4;
+  LPrice.Output := 24;
+  LPrice.AudioIn := 32;
+  LPrice.AudioOut := 64;
+  LPrice.PerMinute := 0.006;
+  LUsage := Default(TAiUsage);
+  LUsage.InputTokens := 1000;
+  LUsage.AudioInTokens := 10000;
+  LUsage.AudioOutTokens := 5000;
+  LUsage.AudioSeconds := 60;
+  // 1000*4 + 10000*32 + 5000*64 = 644000 por milhão = 0,644; + 1 min * 0,006
+  Check(Abs(UsageCost(LUsage, LPrice) - 0.65) < 1E-9, 'custo: tokens de texto e áudio e minuto');
+end;
+
+procedure TestLive;
+var
+  LFrame, LBody: TBytes;
+  LValue: UInt64;
+  LPcm, LBack: TArray<SmallInt>;
+begin
+  // RFC 6455, seção 1.3
+  Check(WsAcceptKey('dGhlIHNhbXBsZSBub25jZQ==') = 's3pPLMBiTxaQ9kYGzzhZRbK+xOo=', 'ws: chave de aceite do RFC');
+  LFrame := WsFrame(1, TEncoding.UTF8.GetBytes('Hello'), [$37, $FA, $21, $3D]);
+  Check((Length(LFrame) = 11) and (LFrame[0] = $81) and (LFrame[1] = $85) and (LFrame[6] = $7F) and
+    (LFrame[7] = $9F) and (LFrame[10] = $58), 'ws: quadro mascarado do RFC');
+  LFrame := WsFrame(1, nil, [1, 2, 3, 4]);
+  Check((Length(LFrame) = 6) and (LFrame[1] = $80), 'ws: quadro vazio');
+  SetLength(LBody, 300);
+  LFrame := WsFrame(2, LBody, [0, 0, 0, 0]);
+  Check((LFrame[1] = $FE) and (LFrame[2] = 1) and (LFrame[3] = 44), 'ws: tamanho de 16 bits');
+  Check((Length(PbVarint(300)) = 2) and (PbVarint(300)[0] = $AC) and (PbVarint(300)[1] = 2), 'protobuf: varint 300');
+  // FfiResponse.new_apm -> apm -> handle -> id = 1 (bytes reais da livekit_ffi)
+  LFrame := [$8A, $03, $06, $0A, $04, $0A, $02, $08, $01];
+  Check(PbFind(LFrame, 49, LValue, LBody) and (Length(LBody) = 6), 'protobuf: acha o campo 49');
+  Check(Length(PbMessage(50, PbField(1, 1) + PbField(2, 0) + PbField(3, 1) + PbField(4, 1))) = 11,
+    'protobuf: new_apm do tamanho do Python');
+  SetLength(LPcm, 1600);
+  Check(Length(ResamplePcm(LPcm, 16000, 24000)) = 2400, 'reamostra 16k -> 24k');
+  Check(Length(ResamplePcm(LPcm, 24000, 16000)) = 1066, 'reamostra 24k -> 16k');
+  LPcm := [1, -2, 32767, -32768];
+  LBack := Base64ToPcm(PcmToBase64(LPcm));
+  Check((Length(LBack) = 4) and (LBack[2] = 32767) and (LBack[3] = -32768), 'pcm base64 ida e volta');
+end;
+
+procedure TestVoice;
+var
+  Levels: TArray<Single>;
+  I: Integer;
+  R: TVoiceReply;
+  Ev: TCalEvents;
+  E: TCalEvent;
+  Wav: TBytes;
+  Rest: string;
+begin
+  // 40 ms por bloco: cauda da palavra (alto, 400 ms), pausa de 800 ms, pedido de 1 s, silêncio.
+  SetLength(Levels, 100);
+  for I := 0 to High(Levels) do
+    if (I < 10) or ((I >= 30) and (I < 55)) then
+      Levels[I] := 0.7
+    else
+      Levels[I] := 0.05;
+  Check(SpeechEndBlock(Levels, 0.05, 40) = 54 + 30, 'voz: fim do pedido 1,2 s depois da fala (cauda da palavra ignorada)');
+  for I := 0 to High(Levels) do
+    Levels[I] := 0.05;
+  Check(SpeechEndBlock(Levels, 0.05, 40) = -1, 'voz: sem fala não termina');
+  Check(ParseVoiceIntent('```json'#10'{"acao":"abrir","tela":"Email","fala":"Abrindo"}'#10'```', R) and
+    (R.Action = vaAbrir) and (R.Page = 'mail') and (R.Speech = 'Abrindo'), 'voz: intenção abrir e-mail');
+  Check(ParseVoiceIntent('{"acao":"xpto"}', R) and (R.Action = vaConversa), 'voz: ação desconhecida vira conversa');
+  Check(not ParseVoiceIntent('sem json', R), 'voz: resposta sem JSON');
+  Check(SpokenTime(EncodeTime(9, 30, 0, 0)) + '|' + SpokenTime(EncodeTime(14, 0, 0, 0)) = '9 e 30|14 horas', 'voz: hora falada');
+  Check(AgendaSpeech(nil) = 'Você não tem compromissos hoje.', 'voz: agenda vazia');
+  E := Default(TCalEvent);
+  E.Title := 'Daily';
+  E.Start := Date + EncodeTime(9, 30, 0, 0);
+  E.Finish := E.Start + 15 / 1440;
+  Ev := [E];
+  E.Title := 'Revisão';
+  E.Start := Date + EncodeTime(16, 0, 0, 0);
+  E.Finish := E.Start + 1 / 24;
+  E.MeetUrl := 'https://meet.google.com/x';
+  Ev := Ev + [E];
+  Check(AgendaSpeech(Ev) = 'Hoje você tem 2 compromissos: às 9 e 30, Daily; às 16 horas, Revisão.', 'voz: agenda falada');
+  Check(NextMeetingSpeech(Ev, Date + EncodeTime(15, 0, 0, 0)) =
+    'Sua próxima reunião é Revisão, às 16 horas, daqui a 61 minutos. Tem link do Meet na agenda.', 'voz: próxima reunião');
+  Check(NextMeetingSpeech(Ev, Date + EncodeTime(9, 40, 0, 0)) = 'Você está em Daily agora, até 9 e 45.', 'voz: reunião em andamento');
+  Check(NormalizeSpeech('Oi, Java!') + '|' + NormalizeSpeech('Ação  Já.') = 'oi java|acao ja', 'voz: texto normalizado');
+  Check(WakeMatch('Oi Java, resuma meus e-mails.', 'Oi Java', 0.72, Rest) and (Rest = 'resuma meus e-mails.'),
+    'voz: frase e pedido na mesma fala: ' + Rest);
+  Check(WakeMatch('Oi, jaba. Qual a minha reunião?', 'Oi Java', 0.72, Rest) and (Rest = 'Qual a minha reunião?'),
+    'voz: frase parecida (jaba): ' + Rest);
+  Check(WakeMatch('Ah, oi java abre a agenda', 'Oi Java', 0.72, Rest) and (Rest = 'abre a agenda'),
+    'voz: palavra de sobra antes: ' + Rest);
+  Check(WakeMatch('Oijava resuma', 'Oi Java', 0.72, Rest) and (Rest = 'resuma'), 'voz: palavras juntas: ' + Rest);
+  Check(not WakeMatch('Hoje vou programar em Java', 'Oi Java', 0.72, Rest), 'voz: Java no meio não ativa');
+  Check(WakeMatch('Oi Java.', 'Oi Java', 0.72, Rest) and (Rest = ''), 'voz: só a frase, sem pedido');
+  Wav := PcmToWav([1, -1, 2]);
+  Check((Length(Wav) = 50) and (Wav[0] = Ord('R')) and (PInteger(@Wav[24])^ = 16000) and (PInteger(@Wav[40])^ = 6),
+    'voz: cabeçalho WAV');
+end;
+
+procedure TestGoogle;
+var
+  M: TMailMsg;
+  N, E: string;
+  Ev: TCalEvents;
+  Sg: TMailSuggestions;
+begin
+  Check(TEncoding.UTF8.GetString(Base64UrlDecode('T2zDoSwgbXVuZG8NCmxpbmhhIDI')) = 'Olá, mundo'#13#10'linha 2',
+    'google: base64url');
+  Check(Base64UrlEncode(TEncoding.UTF8.GetBytes('Olá, mundo'#13#10'linha 2')) = 'T2zDoSwgbXVuZG8NCmxpbmhhIDI',
+    'google: base64url de volta');
+  Check(JwtEmail('x.eyJlbWFpbCI6ICJldUBleGVtcGxvLmNvbSJ9.y') = 'eu@exemplo.com', 'google: e-mail do id_token');
+  SplitFrom('"Ana Souza" <ana@ex.com>', N, E);
+  Check((N = 'Ana Souza') and (E = 'ana@ex.com'), 'google: remetente com nome');
+  SplitFrom('bot@ex.com', N, E);
+  Check((N = 'bot') and (E = 'bot@ex.com'), 'google: remetente só e-mail');
+  Check(HtmlToText('<p>Oi &amp; tchau</p><style>x{}</style><br>fim') = 'Oi & tchau'#10#10'fim', 'google: html vira texto');
+  Check(ParseMailJson('{"id":"m1","threadId":"t1","snippet":"Ol&#225; &amp; c","internalDate":"1759700000000",' +
+    '"labelIds":["INBOX","UNREAD","IMPORTANT"],"payload":{"mimeType":"multipart/alternative","headers":[' +
+    '{"name":"From","value":"Ana <ana@ex.com>"},{"name":"Subject","value":"Deploy"}],"parts":[' +
+    '{"mimeType":"text/html","headers":[],"body":{"data":"PHA-T2kgJmFtcDsgdGNoYXU8L3A-PHN0eWxlPnh7fTwvc3R5bGU-PGJyPmZpbQ"}},' +
+    '{"mimeType":"text/plain","headers":[{"name":"Content-Type","value":"text/plain; charset=\"UTF-8\""}],' +
+    '"body":{"data":"T2zDoSwgbXVuZG8NCmxpbmhhIDI"}}]}}', M), 'google: e-mail lido');
+  Check((M.Subject = 'Deploy') and (M.FromName = 'Ana') and M.Unread and M.Important and M.InInbox,
+    'google: cabeçalhos e rótulos');
+  Check(M.Body = 'Olá, mundo'#10'linha 2', 'google: corpo prefere text/plain');
+  Check(M.Snippet = 'Olá & c', 'google: trecho sem entidades');
+  Check(YearOf(M.Date) = 2025, 'google: data do e-mail');
+  Check(ParseMailJson('{"id":"m2","payload":{"mimeType":"text/html","headers":[],' +
+    '"body":{"data":"PHA-T2kgJmFtcDsgdGNoYXU8L3A-PHN0eWxlPnh7fTwvc3R5bGU-PGJyPmZpbQ"}}}', M) and
+    (M.Body = 'Oi & tchau'#10#10'fim') and (M.Subject = '(sem assunto)'), 'google: só html');
+  Ev := ParseEventsJson('{"items":[{"id":"e1","summary":"Daily","start":{"dateTime":"2026-10-06T09:00:00-03:00"},' +
+    '"end":{"dateTime":"2026-10-06T09:15:00-03:00"},"hangoutLink":"https://meet.google.com/abc"},' +
+    '{"id":"e2","status":"cancelled","summary":"x"},{"id":"e3","summary":"Feriado","start":{"date":"2026-10-12"},' +
+    '"end":{"date":"2026-10-13"},"conferenceData":{"entryPoints":[{"entryPointType":"video","uri":"https://z"}]}}]}');
+  Check(Length(Ev) = 2, 'agenda: cancelado fica de fora');
+  Check((Ev[0].Title = 'Daily') and (Ev[0].MeetUrl = 'https://meet.google.com/abc') and not Ev[0].AllDay and
+    (MinutesBetween(Ev[0].Start, Ev[0].Finish) = 15), 'agenda: evento com hora e Meet');
+  Check(Ev[1].AllDay and (Ev[1].Start = EncodeDate(2026, 10, 12)) and (Ev[1].MeetUrl = 'https://z'),
+    'agenda: dia todo e link de vídeo');
+  Sg := ParseSuggestions('```json'#10'[{"id":"m1","action":"label","label":"Deploy","reason":"build"},' +
+    '{"id":"m2","action":"archive"},{"id":"m3","action":"label","label":""},{"id":"m4","action":"xyz"}]'#10'```');
+  Check((Length(Sg) = 4) and (Sg[0].Action = maLabel) and (Sg[0].LabelName = 'Deploy') and
+    (Sg[1].Action = maArchive) and (Sg[2].Action = maKeep) and (Sg[3].Action = maKeep), 'ia: sugestões do e-mail');
+  Check(ParseSuggestions('nada aqui') = nil, 'ia: resposta sem JSON');
+end;
+
 procedure TestPath;
 var
   E: TPathEntries;
@@ -403,6 +816,26 @@ end;
 
 begin
   // DevboxTests -bench "<comando>": mede o RunCapture com o comando dado.
+  if FindCmdLineSwitch('tls') then
+  begin
+    RunTlsProbe;
+    Exit;
+  end;
+  if FindCmdLineSwitch('aecfile') then
+  begin
+    RunAecFile;
+    Exit;
+  end;
+  if FindCmdLineSwitch('echo') then
+  begin
+    RunEchoTest;
+    Exit;
+  end;
+  if FindCmdLineSwitch('vosk') then
+  begin
+    RunVoskProbe;
+    Exit;
+  end;
   if FindCmdLineSwitch('bench') then
   begin
     Bench(ParamStr(2));
@@ -424,6 +857,13 @@ begin
   TestTools;
   TestAI;
   TestPath;
+  TestGoogle;
+  TestICal;
+  TestImap;
+  TestVoice;
+  TestLive;
+  TestUsage;
+  TestIssues;
   if Failures = 0 then
     Writeln('TUDO OK')
   else

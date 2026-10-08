@@ -34,7 +34,8 @@ function LoadAIConfig: TAIConfig;
 procedure SaveAIKey(AProvider: TAIProvider; const AKey: string);
 
 { Pergunta. False com a mensagem de erro em AAnswer. }
-function AskAI(const AConfig: TAIConfig; const ASystem, APrompt: string; out AAnswer: string): Boolean;
+function AskAI(const AConfig: TAIConfig; const ASystem, APrompt: string; out AAnswer: string;
+  AMaxTokens: Integer = 2048): Boolean;
 
 { Instrução de sistema e texto do pedido de cada ação. }
 function ActionPrompt(AAction: TAIAction; const AText: string; out ASystem: string): string;
@@ -51,11 +52,11 @@ uses
   System.Net.HttpClient,
   System.Net.URLClient,
   Devbox.Store,
+  Devbox.Usage,
   Devbox.Secrets;
 
 const
   CTimeoutMs = 120000;
-  CMaxTokens = 2048;
   // Texto grande demais custa caro e passa do limite: corta no começo.
   CMaxInput = 60000;
 
@@ -127,7 +128,8 @@ begin
   end;
 end;
 
-function AskAI(const AConfig: TAIConfig; const ASystem, APrompt: string; out AAnswer: string): Boolean;
+function AskAI(const AConfig: TAIConfig; const ASystem, APrompt: string; out AAnswer: string;
+  AMaxTokens: Integer): Boolean;
 var
   Req, Msg: TJSONObject;
   Msgs, Blocks: TJSONArray;
@@ -136,6 +138,7 @@ var
   Resp, Url, Text, Prompt: string;
   Code: Integer;
   Headers: TNetHeaders;
+  Usage: TAiUsage;
 begin
   Result := False;
   AAnswer := '';
@@ -150,7 +153,7 @@ begin
   Req := TJSONObject.Create;
   try
     Req.AddPair('model', AConfig.Model);
-    Req.AddPair('max_tokens', TJSONNumber.Create(CMaxTokens));
+    Req.AddPair('max_tokens', TJSONNumber.Create(AMaxTokens));
     Msgs := TJSONArray.Create;
     if AConfig.Provider = apAnthropic then
       Req.AddPair('system', ASystem)
@@ -214,6 +217,24 @@ begin
     end
     else
       V.TryGetValue<string>('choices[0].message.content', Text);
+    // Uso para o painel de custos (Ollama local também responde, mas não cobra).
+    Usage := Default(TAiUsage);
+    Usage.Model := AConfig.Model;
+    Usage.Kind := 'pergunta';
+    if AConfig.Provider = apAnthropic then
+    begin
+      Usage.Provider := 'anthropic';
+      Usage.InputTokens := V.GetValue<Int64>('usage.input_tokens', 0);
+      Usage.OutputTokens := V.GetValue<Int64>('usage.output_tokens', 0);
+    end
+    else
+    begin
+      Usage.Provider := 'openai-compat';
+      Usage.InputTokens := V.GetValue<Int64>('usage.prompt_tokens', 0);
+      Usage.OutputTokens := V.GetValue<Int64>('usage.completion_tokens', 0);
+    end;
+    if Usage.InputTokens + Usage.OutputTokens > 0 then
+      UsageAdd(Usage);
     AAnswer := Trim(Text);
     Result := AAnswer <> '';
     if not Result then

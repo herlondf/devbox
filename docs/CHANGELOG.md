@@ -2,6 +2,41 @@
 
 Formato [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
+## [0.3.0] - 2026-10-08
+
+### Adicionado
+- Contas Google: login OAuth pelo navegador (PKCE, retorno na porta 4083), várias contas, ligar e desligar.
+- E-mail: caixa de entrada das contas numa lista só (`TUIMailList`), corpo do e-mail, abrir no Gmail, marcar lido.
+- Aviso na hora de e-mail importante não lido (a primeira checagem de cada conta não avisa o que já existia).
+- Organizar com IA: sugestão de rótulo, arquivar ou marcar lido; aplica só os marcados, ao clicar.
+- Agenda: agenda principal só para consulta (`TUIScheduler` com `ReadOnly`), próxima reunião, entrar no Meet, aviso N minutos antes.
+- Resumo do dia: agenda de hoje e e-mails importantes resumidos pela IA numa hora marcada.
+- Cliente OAuth embutido no build (`tools/google-client.ps1` lê fora do repo): entrar no Google é só um clique. Cliente próprio continua opcional.
+- E-mail por IMAP com senha de app (Yahoo, iCloud, IMAP de empresa, Gmail): lista, corpo (MIME pelo Indy), aviso de não lido, marcar lido, arquivar e mover para pasta pela IA. TLS pelo SChannel do Windows, sem OpenSSL.
+- Tela Contas com abas: Google, Outro e-mail (IMAP) e Agenda por link. Grupo do menu "E-mail e agenda".
+- Voz com frase de ativação personalizável (padrão "Oi Java"): o Vosk (gramática só com a frase) confere o começo de cada fala; com palavra fora do vocabulário dele, o whisper confere. Comparação aproximada; aceita frase e pedido na mesma fala.
+- Instalador por usuário (`installer/Devbox.iss`, Win64; voz como tarefa opcional) e scripts de release (`ci/build-release.ps1`, `ci/release.ps1`). Atualização automática pelas releases do Devbox (Configuração › Geral).
+- Configuração › Geral ganha idioma das telas de Issues e atualizações; a aba de Issues deixa iniciar com o Windows, tema, idioma e atualizações para o Devbox.
+- Telas não desenham mais o próprio título no meio quando sobra espaço (`ShowCaption` do TPanel).
+- Tela **Issues** (o Vigia inteiro dentro do Devbox): Dashboard, Issues com detalhe, Contas, Configurações, Ctrl+K, assistente, janela mini, busca periódica e avisos; contador na bandeja; Win+Alt+V; modo foco segura os avisos. Primeira abertura importa o vigia.db e troca a inicialização com o Windows do Vigia pela do Devbox.
+- SQLite em modo WAL: o Devbox e o ajudante leem e escrevem sem "database is locked".
+- HUD: texto longo mostra o fim (o que está sendo dito), cabe na largura do painel e o painel cresce até 8 linhas.
+- Voz: botão Testar saída e log de onde a voz sai (ou do erro ao abrir o aparelho).
+- Unificação do Vigia, etapas 1 e 2: núcleo de issues (`Devbox.Issues.*`: GitHub, Jira Server/Cloud, GitLab, Azure DevOps, diff, tradução) e banco `issue_*` no devbox.db com importação única do vigia.db. Ainda sem tela.
+- Menu com a seção Configuração: Geral e IA (abas Interna, Voz e Custos). `Devbox.exe -show -page <tela>` abre direto numa tela.
+- Voz: escolha do microfone e da saída de voz (guardados pelo nome do aparelho) e log ao vivo do que o ouvido entende (memória, 300 linhas).
+- Custos das IAs pagas: uso devolvido por cada API (tokens de texto e de áudio, minutos transcritos) em `ai_usage`, preço por modelo editável (`ai_price_<modelo>`, formato do Vigia com áudio) e teto do mês.
+- Conversa ao vivo com OpenAI Realtime ou Gemini Live (WebSocket próprio sobre o SChannel): microfone sem eco em streaming, voz da IA em streaming (`TPcmStream`), interrupção falando por cima, ferramentas do Devbox (e-mails, agenda, próxima reunião, foco, abrir tela, encerrar) e fim por despedida ou 20 s de silêncio. Configurações › Voz: modo, modelo e chave.
+- Devbox, ajudante e testes agora em 64 bits (Win64).
+- Cancelamento de eco do WebRTC (AEC3 da `livekit_ffi.dll`, protobuf codificado à mão): a voz do Devbox sai do microfone antes do assistente ouvir. O DSP de eco do Windows foi testado e descartado (só 3,4 dB).
+- Motor do pedido em Configurações › Voz: whisper base (processador), whisper large-v3-turbo (placa NVIDIA, `voice\whisper-cuda`), Groq ou OpenAI (chave no Credential Manager). `tools/voice-deps.ps1 -Gpu` baixa o da placa. Pedido gravado até o silêncio e transcrito localmente (whisper.cpp x64, `whisper-server` em 127.0.0.1:4085, fecha junto com o Devbox), ação escolhida pela IA (e-mails, agenda, próxima reunião, foco, abrir tela, conversa) e resposta falada pela voz pt-BR do Windows. HUD flutuante com `TUIAudioVisualizer` sobre disco escuro de borda nítida e sombra curta. `tools/voice-deps.ps1` baixa os arquivos de voz.
+- Agenda por link iCal, sem login (repetição diária, semanal, mensal e anual, exceções, ocorrência movida, link de vídeo).
+
+### Corrigido
+- O Devbox fechava ao abrir pela bandeja (foco antes de a janela aparecer).
+- Exceção na thread da captura de áudio derrubava a escuta sem aviso: agora é tratada (e registrada com `DEVBOX_VOICE_LOG`).
+- Violação de acesso ao sair: resposta de tarefa de fundo (busca de e-mail) rodava depois de a tela ser destruída. Toda resposta de tarefa passa por `QueueUI`, que descarta o que chega na saída.
+
 ## [0.2.0] - 2026-10-06
 
 ### Adicionado

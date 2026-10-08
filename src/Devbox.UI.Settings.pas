@@ -1,13 +1,13 @@
 unit Devbox.UI.Settings;
 
-{ Preferências gerais: guardar clipboard, atalho global, autostart, limpar. }
+{ Configuração › Geral: guardar clipboard, atalho global, autostart, limpar.
+  A IA e a voz ficam em Configuração › IA (Devbox.UI.AISettings). }
 
 interface
 
 uses
   System.Classes,
   UI.Toggle,
-  UI.Input,
   UI.Select,
   Devbox.UI.Kit;
 
@@ -17,33 +17,32 @@ type
     FClipToggle, FHotkeyToggle, FAutostartToggle: TUIToggle;
     FOnHotkeyChanged: TNotifyEvent;
     FOnHistoryCleared: TNotifyEvent;
-    FAIProvider: TUISelect;
-    FAIBase, FAIModel, FAIKey: TUIInput;
+    FLang, FUpdateMode: TUISelect;
+    FOnCheckUpdates: TNotifyEvent;
     procedure SettingToggle(Sender: TObject);
+    procedure LangChange(Sender: TObject);
+    procedure UpdateModeChange(Sender: TObject);
+    procedure CheckUpdatesClick(Sender: TObject);
     procedure ClearHistoryClick(Sender: TObject);
-    procedure AIProviderChange(Sender: TObject);
-    procedure AISaveClick(Sender: TObject);
-    procedure AITestClick(Sender: TObject);
-    procedure LoadAIFields;
   public
     constructor Create(AOwner: TComponent); override;
     property OnHotkeyChanged: TNotifyEvent read FOnHotkeyChanged write FOnHotkeyChanged;
     property OnHistoryCleared: TNotifyEvent read FOnHistoryCleared write FOnHistoryCleared;
+    { "Procurar agora" (a tela Issues tem o atualizador). }
+    property OnCheckUpdates: TNotifyEvent read FOnCheckUpdates write FOnCheckUpdates;
   end;
 
 implementation
 
 uses
   System.SysUtils,
+  System.Math,
   System.StrUtils,
   Vcl.Controls,
   Vcl.ExtCtrls,
   UI.Toast,
-  UI.Labels,
   UI.Button,
-  System.Math,
-  System.Threading,
-  Devbox.AI,
+  Devbox.Issues.Store,
   Devbox.Model,
   Devbox.Store,
   Devbox.Sys;
@@ -51,10 +50,9 @@ uses
 constructor TSettingsPage.Create(AOwner: TComponent);
 var
   Row: TPanel;
-  Title: TUILabel;
 begin
   inherited Create(AOwner);
-  Caption := 'Configurações';
+  Caption := 'Geral';
   Hint := 'Preferências do Devbox neste usuário do Windows';
   FClipToggle := NewToggleRow(Self, 'Guardar o que eu copio',
     Format('Últimos %d itens ficam no histórico. Snippets ficam para sempre.', [HistoryLimit]), SettingToggle);
@@ -75,126 +73,57 @@ begin
   Row.Padding.SetBounds(0, ScaleValue(8), 0, 0);
   NewButton(Row, 'Limpar histórico', ClearHistoryClick);
 
-  // IA
-  Title := TUILabel.Create(Self);
-  Title.Caption := 'IA';
-  Title.Bold := True;
-  Title.FontSize := 15;
-  Title.AutoSize := False;
-  Title.Height := ScaleValue(40);
-  Title.Top := 100000;
-  Title.Align := alTop;
-  Title.Parent := Self;
-  NewHint(Self, 'Usada no botão IA… do Clipboard, em Explicar com IA nos logs e no Comando por IA. ' +
-    'O texto só vai para a IA quando você clica.');
+  // Idioma e atualizações vieram do Vigia (preferências em issue_setting, as mesmas de lá).
+  NewHint(Self, 'Idioma das telas de Issues (português ou inglês; o resto do Devbox é em português). ' +
+    'Vale ao reabrir o Devbox.');
   Row := NewPanel(Self, alTop, 54);
   Row.Padding.SetBounds(0, ScaleValue(8), 0, ScaleValue(4));
-  FAIProvider := TUISelect.Create(Self);
-  FAIProvider.Items.Add(AIProviderNames[apAnthropic]);
-  FAIProvider.Items.Add(AIProviderNames[apOpenAI]);
-  FAIProvider.Width := ScaleValue(240);
-  FAIProvider.AlignWithMargins := True;
-  FAIProvider.Margins.SetBounds(0, 0, ScaleValue(8), 0);
-  FAIProvider.Align := alLeft;
-  FAIProvider.Parent := Row;
-  FAIModel := TUIInput.Create(Self);
-  FAIModel.LabelMode := ilmBorder;
-  FAIModel.LabelText := 'Modelo';
-  FAIModel.ReserveHintSpace := False;
-  FAIModel.Width := ScaleValue(240);
-  FAIModel.AlignWithMargins := True;
-  FAIModel.Margins.SetBounds(0, 0, ScaleValue(8), 0);
-  FAIModel.Left := 1000;
-  FAIModel.Align := alLeft;
-  FAIModel.Parent := Row;
-  FAIBase := TUIInput.Create(Self);
-  FAIBase.LabelMode := ilmBorder;
-  FAIBase.LabelText := 'Endereço (compatível com OpenAI, ex.: http://localhost:11434/v1)';
-  FAIBase.ReserveHintSpace := False;
-  FAIBase.Align := alClient;
-  FAIBase.Parent := Row;
+  FLang := TUISelect.Create(Self);
+  FLang.Items.Add('Automático (Windows)');
+  FLang.Items.Add('Português');
+  FLang.Items.Add('English');
+  FLang.ItemIndex := Max(0, IndexText(IssueStore.GetSetting('lang'), ['', 'pt', 'en']));
+  FLang.Width := ScaleValue(260);
+  FLang.Align := alLeft;
+  FLang.Parent := Row;
+  FLang.OnChange := LangChange;
+  NewHint(Self, 'Atualizações: versão ' + AppVersion + '. Procura release nova do Devbox uma vez por dia ' +
+    '(só na cópia instalada pelo instalador).');
   Row := NewPanel(Self, alTop, 54);
-  Row.Padding.SetBounds(0, ScaleValue(4), 0, ScaleValue(4));
-  NewButton(Row, 'Testar', AITestClick, bvGhost, alRight);
-  NewButton(Row, 'Salvar', AISaveClick, bvPrimary, alRight);
-  FAIKey := TUIInput.Create(Self);
-  FAIKey.LabelMode := ilmBorder;
-  FAIKey.LabelText := 'Chave (fica no Credential Manager do Windows, não no banco)';
-  FAIKey.ReserveHintSpace := False;
-  FAIKey.PasswordChar := '*';
-  FAIKey.PasswordToggle := True;
-  FAIKey.Align := alClient;
-  FAIKey.Parent := Row;
-  LoadAIFields;
-  FAIProvider.OnChange := AIProviderChange;
+  Row.Padding.SetBounds(0, ScaleValue(8), 0, ScaleValue(4));
+  FUpdateMode := TUISelect.Create(Self);
+  FUpdateMode.Items.Add('Só avisar');
+  FUpdateMode.Items.Add('Instalar sozinho');
+  FUpdateMode.Items.Add('Não procurar');
+  FUpdateMode.ItemIndex := Max(0, IndexText(IssueStore.GetSetting('update_mode'), ['notify', 'auto', 'off']));
+  FUpdateMode.Width := ScaleValue(260);
+  FUpdateMode.AlignWithMargins := True;
+  FUpdateMode.Margins.SetBounds(0, 0, ScaleValue(8), 0);
+  FUpdateMode.Align := alLeft;
+  FUpdateMode.Parent := Row;
+  FUpdateMode.OnChange := UpdateModeChange;
+  NewButton(Row, 'Procurar agora', CheckUpdatesClick, bvOutline, alLeft).Left := 100000;
 end;
 
-procedure TSettingsPage.LoadAIFields;
-var
-  C: TAIConfig;
+procedure TSettingsPage.LangChange(Sender: TObject);
+const
+  CCodes: array[0..2] of string = ('', 'pt', 'en');
 begin
-  C := LoadAIConfig;
-  FAIProvider.ItemIndex := Ord(C.Provider);
-  FAIModel.Value := C.Model;
-  FAIBase.Value := C.BaseUrl;
-  FAIBase.Visible := C.Provider = apOpenAI;
-  // A chave não volta para a tela: só se sabe que existe.
-  FAIKey.Value := '';
-  if C.Key <> '' then
-    FAIKey.LabelText := 'Chave salva no Credential Manager (deixe em branco para manter)'
-  else
-    FAIKey.LabelText := 'Chave (fica no Credential Manager do Windows, não no banco)';
+  IssueStore.SetSetting('lang', CCodes[EnsureRange(FLang.ItemIndex, 0, 2)]);
+  TUIToastManager.Show('Idioma das Issues muda ao reabrir o Devbox', ttInfo, 3000);
 end;
 
-procedure TSettingsPage.AIProviderChange(Sender: TObject);
+procedure TSettingsPage.UpdateModeChange(Sender: TObject);
+const
+  CModes: array[0..2] of string = ('notify', 'auto', 'off');
 begin
-  Store.SetSetting('ai_provider', IntToStr(Max(FAIProvider.ItemIndex, 0)));
-  Store.SetSetting('ai_model', '');
-  LoadAIFields;
+  IssueStore.SetSetting('update_mode', CModes[EnsureRange(FUpdateMode.ItemIndex, 0, 2)]);
 end;
 
-procedure TSettingsPage.AISaveClick(Sender: TObject);
+procedure TSettingsPage.CheckUpdatesClick(Sender: TObject);
 begin
-  Store.SetSetting('ai_provider', IntToStr(Max(FAIProvider.ItemIndex, 0)));
-  Store.SetSetting('ai_model', Trim(FAIModel.Value));
-  Store.SetSetting('ai_base_url', Trim(FAIBase.Value));
-  if Trim(FAIKey.Value) <> '' then
-    SaveAIKey(TAIProvider(Max(FAIProvider.ItemIndex, 0)), Trim(FAIKey.Value));
-  LoadAIFields;
-  TUIToastManager.Show('IA salva', ttSuccess, 2000);
-end;
-
-procedure TSettingsPage.AITestClick(Sender: TObject);
-var
-  C: TAIConfig;
-begin
-  AISaveClick(nil);
-  C := LoadAIConfig;
-  TUIToastManager.Show('Testando a IA...', ttLoading, 3000);
-  TTask.Run(
-    procedure
-    var
-      Answer: string;
-      Ok: Boolean;
-    begin
-      try
-        Ok := AskAI(C, 'Responda só com: ok', 'teste', Answer);
-      except
-        on E: Exception do
-        begin
-          Ok := False;
-          Answer := E.Message;
-        end;
-      end;
-      System.Classes.TThread.Queue(nil,
-        procedure
-        begin
-          if Ok then
-            TUIToastManager.Show('IA respondeu: ' + Copy(Answer, 1, 60), ttSuccess, 4000)
-          else
-            TUIToastManager.Show('IA não respondeu: ' + Answer, ttError, 7000);
-        end);
-    end);
+  if Assigned(FOnCheckUpdates) then
+    FOnCheckUpdates(Self);
 end;
 
 procedure TSettingsPage.SettingToggle(Sender: TObject);

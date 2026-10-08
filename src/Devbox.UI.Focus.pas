@@ -342,7 +342,7 @@ begin
       except
         Apps := nil;
       end;
-      System.Classes.TThread.Queue(nil,
+      QueueUI(
         procedure
         begin
           if Apps <> nil then

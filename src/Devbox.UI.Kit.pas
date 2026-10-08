@@ -34,6 +34,21 @@ type
     function PageKey(var AKey: Word; AShift: TShiftState): Boolean; virtual;
   end;
 
+var
+  { Ligada no começo da destruição da janela. Resposta de tarefa de fundo que
+    chega depois (o Delphi roda a fila enquanto espera as tarefas na saída) é
+    descartada: a tela já não existe. }
+  AppClosing: Boolean;
+
+{ TThread.Queue que não roda depois de AppClosing. Para toda resposta de tarefa
+  de fundo que mexe em tela. }
+procedure QueueUI(const AProc: TProc);
+{ TTask.Run sem overload. O código das telas de Issues (vindo do Vigia) não compila
+  com TTask.Run(procedure ...) direto: o compilador recusa o literal na escolha do overload. }
+procedure RunTask(const AProc: TProc);
+{ TThread.ForceQueue (próxima volta da fila) que não roda depois de AppClosing. }
+procedure ForceQueueUI(const AProc: TProc);
+
 { TPanel do VCL não ouve o tema: pinta o fundo de todos dentro de AControl. }
 procedure PaintPanels(AControl: TWinControl);
 
@@ -54,14 +69,52 @@ const
     ' M18.25 8.6 18 9.75l-.26-1.15a3.4 3.4 0 0 0-2.34-2.34L14.25 6l1.15-.26a3.4 3.4 0 0 0 2.34-2.34L18 2.25l.26 1.15a3.4 3.4 0 0 0 2.34 2.34l1.15.26-1.15.26a3.4 3.4 0 0 0-2.34 2.34z';
   IconCpu = 'M8.25 3v1.5 M15.75 3v1.5 M8.25 19.5V21 M15.75 19.5V21 M3 8.25h1.5 M3 15.75h1.5 M19.5 8.25H21 M19.5 15.75H21 M6.75 4.5h10.5v15H6.75z M9.75 9.75h4.5v4.5h-4.5z';
   IconServer = 'M3.75 4.5h16.5v6H3.75z M3.75 13.5h16.5v6H3.75z M7.5 7.5h.01 M7.5 16.5h.01';
+  IconMail = 'M3 6.75h18v10.5H3z M3 7.5l9 6 9-6';
+  IconCalendar = 'M4.5 6h15v14.25h-15z M4.5 10.5h15 M8.25 3.75v3.75 M15.75 3.75v3.75';
+  IconUser = 'M12 3.75a3.75 3.75 0 1 0 0 7.5 3.75 3.75 0 0 0 0-7.5z M4.5 20.25a7.5 7.5 0 0 1 15 0';
+  IconNews = 'M5.25 4.5h13.5v15H5.25z M8.25 8.25h7.5 M8.25 12h7.5 M8.25 15.75h4.5';
+  IconIssues = 'M2.25 12s3.75-6.75 9.75-6.75S21.75 12 21.75 12s-3.75 6.75-9.75 6.75S2.25 12 2.25 12z ' +
+    'M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z';
   IconSettings = 'M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z M12 2.25v3 M12 18.75v3 M2.25 12h3 M18.75 12h3 ' +
     'M5.1 5.1l2.1 2.1 M16.8 16.8l2.1 2.1 M5.1 18.9l2.1-2.1 M16.8 7.2l2.1-2.1';
 
 implementation
 
 uses
+  System.Threading,
   UI.Theme,
   UI.Painter.Vcl;
+
+procedure QueueUI(const AProc: TProc);
+var
+  Proc: TProc;
+begin
+  Proc := AProc;
+  TThread.Queue(nil,
+    procedure
+    begin
+      if not AppClosing then
+        Proc();
+    end);
+end;
+
+procedure RunTask(const AProc: TProc);
+begin
+  TTask.Run(AProc);
+end;
+
+procedure ForceQueueUI(const AProc: TProc);
+var
+  Proc: TProc;
+begin
+  Proc := AProc;
+  TThread.ForceQueue(nil,
+    procedure
+    begin
+      if not AppClosing then
+        Proc();
+    end);
+end;
 
 function LineIcon(const APath: string): string;
 var
@@ -92,6 +145,8 @@ constructor TDevPage.Create(AOwner: TComponent);
 begin
   inherited Create(AOwner);
   BevelOuter := bvNone;
+  // Caption é o título da tela no topo da janela; o TPanel não deve desenhá-lo no meio.
+  ShowCaption := False;
   ParentBackground := False;
   DoubleBuffered := True;
   Visible := False;

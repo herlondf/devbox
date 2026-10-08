@@ -1,4 +1,4 @@
-unit Devbox.UI.Main;
+﻿unit Devbox.UI.Main;
 
 { Janela única: menu lateral com as telas (TDevPage), cabeçalho com título e
   tema, ícone da bandeja e atalho global Win+Alt+B. }
@@ -34,7 +34,15 @@ uses
   Devbox.UI.Tools,
   Devbox.UI.AICommand,
   Devbox.UI.System,
-  Devbox.UI.Settings;
+  Devbox.UI.Settings,
+  Devbox.UI.AISettings,
+  Devbox.Issues.UI.Main,
+  Devbox.Issues.TrayIcon,
+  Devbox.UI.Google,
+  Devbox.UI.Mail,
+  Devbox.UI.Agenda,
+  Devbox.UI.Digest,
+  Devbox.UI.Voice;
 
 type
   TMainForm = class(TForm)
@@ -53,12 +61,25 @@ type
     FWatchesPage: TWatchesPage;
     FFocusPage: TFocusPage;
     FFocusItem: TMenuItem;
+    FGooglePage: TGooglePage;
+    FMailPage: TMailPage;
+    FAgendaPage: TAgendaPage;
+    FDigestPage: TDigestPage;
+    FSettingsPage: TAISettingsPage;
+    FIssuesPage: TIssuesPage;
+    FGeneralPage: TSettingsPage;
+    FVoice: TVoiceAssistant;
     FApplyingSize: Boolean;
     FExitRequested: Boolean;
+    procedure GoogleAccountsChanged(Sender: TObject);
     procedure AddPage(const AID, AGroup, AIconPath: string; APage: TDevPage);
     procedure ShowPage(const AID: string);
     procedure SidebarChange(Sender: TObject);
     procedure BuildTray;
+    procedure IssuesCounts(AUnread: Integer; AOverdue: Boolean);
+    procedure IssuesShowRequest(Sender: TObject);
+    procedure IssuesHideRequest(Sender: TObject);
+    procedure IssuesCheckUpdates(Sender: TObject);
     procedure BuildShell;
     procedure ApplyThemeColors;
     procedure ApplyCompactSize;
@@ -71,6 +92,9 @@ type
     procedure EditSnippet(AId: Integer);
     procedure ShowNotify(const ATitle, AText: string; AError: Boolean);
     procedure FocusMenuClick(Sender: TObject);
+    procedure VoiceMenuClick(Sender: TObject);
+    procedure VoiceSettingChanged(Sender: TObject);
+    procedure ApplyVoiceSetting(AShowErrors: Boolean);
     procedure FocusChanged(Sender: TObject);
     procedure ShowWindow_;
     procedure MenuOpenClick(Sender: TObject);
@@ -95,6 +119,11 @@ uses
   System.StrUtils,
   System.Math,
   Winapi.Dwmapi,
+  Devbox.Google,
+  Devbox.AI,
+  Devbox.MailSource,
+  Devbox.Voice,
+  Devbox.Voice.Agent,
   Vcl.Graphics,
   UI.Tokens,
   UI.Painter.Vcl,
@@ -104,6 +133,11 @@ uses
   Devbox.Notify,
   Devbox.Focus,
   Devbox.Model,
+  Devbox.Secrets,
+  Devbox.Whisper,
+  Devbox.Realtime,
+  Devbox.Speech,
+  UI.Audio.Capture,
   Devbox.Store;
 
 const
@@ -163,6 +197,7 @@ constructor TMainForm.Create(AOwner: TComponent);
 var
   Settings: TSettingsPage;
   Services: TServicesPage;
+  LStartPage: string;
 begin
   inherited CreateNew(AOwner);
   Caption := 'Devbox ' + AppVersion;
@@ -197,6 +232,20 @@ begin
   FFocusPage.OnChanged := FocusChanged;
   AddPage('focus', 'Dia a dia', IconTarget, FFocusPage);
   AddPage('tools', 'Dia a dia', IconWrench, TToolsPage.Create(Self));
+  FMailPage := TMailPage.Create(Self);
+  AddPage('mail', 'E-mail e agenda', IconMail, FMailPage);
+  FAgendaPage := TAgendaPage.Create(Self);
+  AddPage('agenda', 'E-mail e agenda', IconCalendar, FAgendaPage);
+  FDigestPage := TDigestPage.Create(Self);
+  FDigestPage.OnTodayEvents :=
+    function: TCalEvents
+    begin
+      Result := FAgendaPage.TodayEvents;
+    end;
+  AddPage('digest', 'E-mail e agenda', IconNews, FDigestPage);
+  FGooglePage := TGooglePage.Create(Self);
+  FGooglePage.OnAccountsChanged := GoogleAccountsChanged;
+  AddPage('google', 'E-mail e agenda', IconUser, FGooglePage);
   FClipboard.OnEditSnippet := EditSnippet;
   // Expansor e captura moram no DevboxHelper.exe (ver Devbox.Keys).
   StartHelper;
@@ -210,6 +259,19 @@ begin
   AddPage('jobs', 'Automação', IconClock, TJobsPage.Create(Self));
   FWatchesPage := TWatchesPage.Create(Self);
   AddPage('watches', 'Automação', IconBell, FWatchesPage);
+  // Issues e PRs (o antigo Vigia): GitHub, Jira, GitLab, Azure DevOps.
+  FIssuesPage := TIssuesPage.Create(Self);
+  FIssuesPage.Tray := FTray;
+  FIssuesPage.OnCounts := IssuesCounts;
+  FIssuesPage.OnShowRequest := IssuesShowRequest;
+  FIssuesPage.OnHideRequest := IssuesHideRequest;
+  FIssuesPage.OnExitRequest := MenuExitClick;
+  FIssuesPage.QuietCheck :=
+    function: Boolean
+    begin
+      Result := FocusActive;
+    end;
+  AddPage('issues', 'Trabalho', IconIssues, FIssuesPage);
   Services.OnWatchRequest := FWatchesPage.AddWatch;
   NotifyHandler :=
     procedure(const ATitle, AText: string; AError: Boolean)
@@ -219,15 +281,64 @@ begin
   Settings := TSettingsPage.Create(Self);
   Settings.OnHotkeyChanged := HotkeySettingChanged;
   Settings.OnHistoryCleared := HistoryCleared;
-  AddPage('settings', 'Devbox', IconSettings, Settings);
+  FGeneralPage := Settings;
+  // "Procurar agora" da tela Geral usa o atualizador da tela Issues (criada antes).
+  FGeneralPage.OnCheckUpdates := IssuesCheckUpdates;
+  AddPage('settings', 'Configuração', IconSettings, Settings);
+  FSettingsPage := TAISettingsPage.Create(Self);
+  FSettingsPage.OnVoiceChanged := VoiceSettingChanged;
+  FSettingsPage.OnVoiceTalk := VoiceMenuClick;
+  AddPage('ai', 'Configuração', IconSparkles, FSettingsPage);
+
+  // Criado por último: é destruído primeiro (o microfone para antes das telas).
+  FVoice := TVoiceAssistant.Create(Self);
+  FVoice.OnContext :=
+    function: TVoiceContext
+    begin
+      Result := Default(TVoiceContext);
+      Result.Config := LoadAIConfig;
+      LoadGoogleClient;
+      Result.Accounts := LoadMailAccounts;
+      Result.Today := FAgendaPage.TodayEvents;
+      Result.Upcoming := FAgendaPage.AllEvents;
+      Result.Now := Now;
+    end;
+  FVoice.OnAction :=
+    procedure(const AReply: TVoiceReply)
+    begin
+      case AReply.Action of
+        vaFocoLigar:
+          if not FocusActive then
+            FFocusPage.Toggle;
+        vaFocoDesligar:
+          if FocusActive then
+            FFocusPage.Toggle;
+        vaAbrir:
+          if FPages.ContainsKey(AReply.Page) then
+          begin
+            ShowPage(AReply.Page);
+            ShowWindow_;
+          end;
+      end;
+    end;
+  System.Classes.TThread.ForceQueue(nil,
+    procedure
+    begin
+      if not AppClosing then
+        ApplyVoiceSetting(False);
+    end);
 
   ApplyThemeColors;
   UITheme.AddChangeListener(ThemeChanged);
-  ShowPage('clipboard');
+  // Devbox.exe -show -page settings: abre direto numa tela (atalho e teste de tela).
+  if not FindCmdLineSwitch('page', LStartPage, True, [clstValueNextParam]) or not FPages.ContainsKey(LStartPage) then
+    LStartPage := 'clipboard';
+  ShowPage(LStartPage);
 end;
 
 destructor TMainForm.Destroy;
 begin
+  AppClosing := True;
   NotifyHandler := nil;
   UITheme.RemoveChangeListener(ThemeChanged);
   FPages.Free;
@@ -364,6 +475,7 @@ begin
   AddItem('Abrir', MenuOpenClick, True);
   AddItem('Modo foco', FocusMenuClick);
   FFocusItem := FTrayMenu.Items[FTrayMenu.Items.Count - 1];
+  AddItem('Falar com o Devbox', VoiceMenuClick);
   AddItem('-', nil);
   AddItem('Sair', MenuExitClick);
   FTray := TTrayIcon.Create(Self);
@@ -486,6 +598,12 @@ begin
   FClipboard.ReloadClips;
 end;
 
+procedure TMainForm.GoogleAccountsChanged(Sender: TObject);
+begin
+  FMailPage.Reload;
+  FAgendaPage.Reload;
+end;
+
 procedure TMainForm.EditSnippet(AId: Integer);
 begin
   FExpanderPage.EditSnippetById(AId);
@@ -511,6 +629,92 @@ end;
 procedure TMainForm.FocusMenuClick(Sender: TObject);
 begin
   FFocusPage.Toggle;
+end;
+
+procedure TMainForm.ApplyVoiceSetting(AShowErrors: Boolean);
+const
+  CSimilarity: array[0..2] of Single = (0.6, 0.72, 0.85);
+var
+  LError: string;
+  LEngine: TSttEngine;
+  LLive: Integer;
+  LLiveConfig: TRealtimeConfig;
+begin
+  FVoice.SetPhrase(Store.GetSetting('voice_phrase', VoiceDefaultPhrase),
+    CSimilarity[EnsureRange(StrToIntDef(Store.GetSetting('voice_sense', '1'), 1), 0, 2)]);
+  // Aparelhos guardados pelo nome (o índice muda quando se pluga outro).
+  VoiceOutputDevice := DeviceIndexByName(OutputDeviceNames, Store.GetSetting('voice_out_dev'));
+  FVoice.SetInputDevice(DeviceIndexByName(TUIAudioCapture.DeviceNames, Store.GetSetting('voice_in_dev')));
+  LEngine := TSttEngine(EnsureRange(StrToIntDef(Store.GetSetting('voice_stt', '0'), 0), 0, Ord(High(TSttEngine))));
+  if SttIsCloud(LEngine) then
+    SttConfigure(LEngine, LoadSecret(SttSecretTarget(LEngine)))
+  else
+    SttConfigure(LEngine, '');
+  LLive := EnsureRange(StrToIntDef(Store.GetSetting('voice_live', '0'), 0), 0, 2);
+  LLiveConfig := Default(TRealtimeConfig);
+  if LLive > 0 then
+  begin
+    LLiveConfig.Provider := TRealtimeProvider(LLive - 1);
+    LLiveConfig.Key := LoadSecret('Devbox:rt:' + IntToStr(LLive));
+    LLiveConfig.Model := Store.GetSetting('voice_live_model_' + IntToStr(LLive), '');
+  end;
+  FVoice.SetLive(LLive > 0, LLiveConfig);
+  if Store.GetSetting('voice_on', '0') <> '1' then
+  begin
+    FVoice.Enable(False, LError);
+    Exit;
+  end;
+  if FVoice.Enable(True, LError) then
+  begin
+    if AShowErrors then
+      TUIToastManager.Show('Ouvindo. Diga "' + Store.GetSetting('voice_phrase', VoiceDefaultPhrase) + '" e o pedido.',
+        ttSuccess, 3500);
+  end
+  else
+  begin
+    // Sem microfone ou sem os arquivos de voz: desliga para não insistir a cada abertura.
+    Store.SetSetting('voice_on', '0');
+    FSettingsPage.SetVoiceOn(False);
+    if AShowErrors then
+      TUIToastManager.Show('Voz não ligou: ' + LError, ttError, 8000)
+    else
+      ShowNotify('Voz do Devbox', 'Não ligou: ' + LError, True);
+  end;
+end;
+
+procedure TMainForm.VoiceSettingChanged(Sender: TObject);
+begin
+  ApplyVoiceSetting(True);
+end;
+
+procedure TMainForm.VoiceMenuClick(Sender: TObject);
+begin
+  FVoice.Trigger;
+end;
+
+{ Contador das issues sobre o ícone da bandeja (o desenho com número vem do Vigia). }
+procedure TMainForm.IssuesCounts(AUnread: Integer; AOverdue: Boolean);
+begin
+  if (AUnread > 0) or AOverdue then
+    FTray.Icon.Handle := Devbox.Issues.TrayIcon.MakeTrayIcon(AUnread, AOverdue)
+  else
+    FTray.Icon.Handle := MakeTrayIcon;
+end;
+
+procedure TMainForm.IssuesShowRequest(Sender: TObject);
+begin
+  ShowPage('issues');
+  ShowWindow_;
+end;
+
+procedure TMainForm.IssuesCheckUpdates(Sender: TObject);
+begin
+  FIssuesPage.CheckUpdatesNow;
+end;
+
+procedure TMainForm.IssuesHideRequest(Sender: TObject);
+begin
+  Hide;
 end;
 
 procedure TMainForm.FocusChanged(Sender: TObject);
@@ -546,6 +750,7 @@ end;
 procedure TMainForm.MenuExitClick(Sender: TObject);
 begin
   FExitRequested := True;
+  AppClosing := True;
   PostToHelper(WM_HELPER_QUIT);
   Close;
 end;

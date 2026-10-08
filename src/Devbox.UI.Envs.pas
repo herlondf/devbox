@@ -255,7 +255,7 @@ begin
               IfThen((Msg <> '') and (Msg <> 'ok'), '  ·  ' + Copy(Msg, 1, 200), '') + #10;
           end);
       end;
-      System.Classes.TThread.Queue(nil,
+      QueueUI(
         procedure
         begin
           FBusy := False;

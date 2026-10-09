@@ -1,4 +1,4 @@
-﻿unit Devbox.UI.Main;
+unit Devbox.UI.Main;
 
 { Janela única: menu lateral com as telas (TDevPage), cabeçalho com título e
   tema, ícone da bandeja e atalho global Win+Alt+B. }
@@ -21,6 +21,8 @@ uses
   UI.Labels,
   UI.Sidebar,
   Devbox.UI.Kit,
+  Devbox.UI.SidePeek,
+  Devbox.UI.HostPage,
   Devbox.Helper,
   Devbox.UI.Clipboard,
   Devbox.UI.Expander,
@@ -31,8 +33,8 @@ uses
   Devbox.UI.Watches,
   Devbox.UI.Envs,
   Devbox.UI.Focus,
+  Devbox.UI.Pomodoro,
   Devbox.UI.Tools,
-  Devbox.UI.AICommand,
   Devbox.UI.System,
   Devbox.UI.Settings,
   Devbox.UI.AISettings,
@@ -53,6 +55,8 @@ type
     FTitle, FSubtitle: TUILabel;
     FThemeSwap: TUISwap;
     FContent: TPanel;
+    FFooter: TPanel;
+    FFooterActions: TArray<TProc>;
     FPages: TDictionary<string, TDevPage>;
     FPageOrder: TList<string>;
     FActive: TDevPage;
@@ -60,6 +64,9 @@ type
     FExpanderPage: TExpanderPage;
     FWatchesPage: TWatchesPage;
     FFocusPage: TFocusPage;
+    FToolsPage: TToolsPage;
+    FPomodoro: TPomodoroPage;
+    FIssuesConfig: THostPage;
     FFocusItem: TMenuItem;
     FGooglePage: TGooglePage;
     FMailPage: TMailPage;
@@ -71,16 +78,27 @@ type
     FVoice: TVoiceAssistant;
     FApplyingSize: Boolean;
     FExitRequested: Boolean;
+    procedure PaletteCommands(APalette: TObject);
+    procedure PomodoroMenuClick(Sender: TObject);
+    function PageCommand(const AId: string): TProc;
     procedure GoogleAccountsChanged(Sender: TObject);
+    function NewPomodoro: TPomodoroPage;
     procedure AddPage(const AID, AGroup, AIconPath: string; APage: TDevPage);
-    procedure ShowPage(const AID: string);
+    procedure ShowPage(AID: string);
+    function PageExists(const AID: string): Boolean;
     procedure SidebarChange(Sender: TObject);
     procedure BuildTray;
     procedure IssuesCounts(AUnread: Integer; AOverdue: Boolean);
     procedure IssuesShowRequest(Sender: TObject);
     procedure IssuesHideRequest(Sender: TObject);
     procedure IssuesCheckUpdates(Sender: TObject);
+    procedure IssuesAiUsage(Sender: TObject);
+    procedure RegisterDevboxTools;
+    function ScreenContext: string;
+    function MyDayText: string;
     procedure BuildShell;
+    procedure FillFooter;
+    procedure FooterClick(Sender: TObject);
     procedure ApplyThemeColors;
     procedure ApplyCompactSize;
     procedure ThemeChanged(Sender: TObject; AMode: TUIThemeMode);
@@ -128,6 +146,14 @@ uses
   UI.Tokens,
   UI.Painter.Vcl,
   UI.Toast,
+  UI.Kbd,
+  UI.Assistant.Tools,
+  System.JSON,
+  System.Threading,
+  Vcl.Clipbrd,
+  Devbox.Sys,
+  UI.CommandPalette,
+  Devbox.Issues.Model,
   UI.Icons.Heroicons,
   Devbox.UI.Dialogs,
   Devbox.Notify,
@@ -142,6 +168,9 @@ uses
 
 const
   HotkeyId = 1;
+
+type
+  TFooterLabel = class(TControl);
 
 var
   WM_DEVBOX_SHOW: Cardinal;
@@ -198,6 +227,7 @@ var
   Settings: TSettingsPage;
   Services: TServicesPage;
   LStartPage: string;
+  LDashboard, LAccounts, LIssueSettings: TControl;
 begin
   inherited CreateNew(AOwner);
   Caption := 'Devbox ' + AppVersion;
@@ -223,42 +253,26 @@ begin
 
   BuildTray;
   BuildShell;
-  FClipboard := TClipboardPage.Create(Self);
-  AddPage('clipboard', 'Dia a dia', IconClipboard, FClipboard);
-  FExpanderPage := TExpanderPage.Create(Self);
-  FExpanderPage.OnChanged := ExpanderChanged;
-  AddPage('expander', 'Dia a dia', IconKeyboard, FExpanderPage);
-  FFocusPage := TFocusPage.Create(Self);
-  FFocusPage.OnChanged := FocusChanged;
-  AddPage('focus', 'Dia a dia', IconTarget, FFocusPage);
-  AddPage('tools', 'Dia a dia', IconWrench, TToolsPage.Create(Self));
+  ShortcutsChanged :=
+    procedure
+    begin
+      if FActive <> nil then
+        FillFooter;
+    end;
   FMailPage := TMailPage.Create(Self);
-  AddPage('mail', 'E-mail e agenda', IconMail, FMailPage);
   FAgendaPage := TAgendaPage.Create(Self);
-  AddPage('agenda', 'E-mail e agenda', IconCalendar, FAgendaPage);
   FDigestPage := TDigestPage.Create(Self);
   FDigestPage.OnTodayEvents :=
     function: TCalEvents
     begin
       Result := FAgendaPage.TodayEvents;
     end;
-  AddPage('digest', 'E-mail e agenda', IconNews, FDigestPage);
-  FGooglePage := TGooglePage.Create(Self);
-  FGooglePage.OnAccountsChanged := GoogleAccountsChanged;
-  AddPage('google', 'E-mail e agenda', IconUser, FGooglePage);
-  FClipboard.OnEditSnippet := EditSnippet;
-  // Expansor e captura moram no DevboxHelper.exe (ver Devbox.Keys).
-  StartHelper;
-  Services := TServicesPage.Create(Self);
-  AddPage('services', 'Ambiente', IconServer, Services);
-  AddPage('cleanup', 'Ambiente', IconBroom, TCleanupPage.Create(Self));
-  AddPage('network', 'Ambiente', IconGlobe, TNetworkPage.Create(Self));
-  AddPage('system', 'Ambiente', IconCpu, TSystemPage.Create(Self));
-  AddPage('envs', 'Automação', IconPlay, TEnvsPage.Create(Self));
-  AddPage('aicmd', 'Automação', IconSparkles, TAICommandPage.Create(Self));
-  AddPage('jobs', 'Automação', IconClock, TJobsPage.Create(Self));
-  FWatchesPage := TWatchesPage.Create(Self);
-  AddPage('watches', 'Automação', IconBell, FWatchesPage);
+  FDigestPage.OnOpenIssues :=
+    function: TItems
+    begin
+      Result := FIssuesPage.OpenItems;
+    end;
+  AddPage('home', 'Início', IconHome, FDigestPage);
   // Issues e PRs (o antigo Vigia): GitHub, Jira, GitLab, Azure DevOps.
   FIssuesPage := TIssuesPage.Create(Self);
   FIssuesPage.Tray := FTray;
@@ -271,7 +285,31 @@ begin
     begin
       Result := FocusActive;
     end;
-  AddPage('issues', 'Trabalho', IconIssues, FIssuesPage);
+  AddPage('issues', 'Início', IconIssues, FIssuesPage);
+  AddPage('mail', 'E-mail e agenda', IconMail, FMailPage);
+  AddPage('agenda', 'E-mail e agenda', IconCalendar, FAgendaPage);
+  FFocusPage := TFocusPage.Create(Self);
+  FFocusPage.OnChanged := FocusChanged;
+  AddPage('focus', 'Produtividade', IconTarget, FFocusPage);
+  FPomodoro := NewPomodoro;
+  AddPage('pomodoro', 'Produtividade', IconTimer, FPomodoro);
+  FClipboard := TClipboardPage.Create(Self);
+  FClipboard.OnEditSnippet := EditSnippet;
+  FExpanderPage := TExpanderPage.Create(Self);
+  FExpanderPage.OnChanged := ExpanderChanged;
+  FToolsPage := TToolsPage.Create(Self, FClipboard, FExpanderPage);
+  AddPage('tools', 'Ferramentas', IconWrench, FToolsPage);
+  // Expansor e captura moram no DevboxHelper.exe (ver Devbox.Keys).
+  StartHelper;
+  Services := TServicesPage.Create(Self);
+  AddPage('services', 'Ambiente', IconServer, Services);
+  AddPage('cleanup', 'Ambiente', IconBroom, TCleanupPage.Create(Self));
+  AddPage('network', 'Ambiente', IconGlobe, TNetworkPage.Create(Self));
+  AddPage('system', 'Ambiente', IconCpu, TSystemPage.Create(Self));
+  AddPage('envs', 'Automação', IconPlay, TEnvsPage.Create(Self));
+  AddPage('jobs', 'Automação', IconClock, TJobsPage.Create(Self));
+  FWatchesPage := TWatchesPage.Create(Self);
+  AddPage('watches', 'Automação', IconBell, FWatchesPage);
   Services.OnWatchRequest := FWatchesPage.AddWatch;
   NotifyHandler :=
     procedure(const ATitle, AText: string; AError: Boolean)
@@ -285,10 +323,72 @@ begin
   // "Procurar agora" da tela Geral usa o atualizador da tela Issues (criada antes).
   FGeneralPage.OnCheckUpdates := IssuesCheckUpdates;
   AddPage('settings', 'Configuração', IconSettings, Settings);
+  FGooglePage := TGooglePage.Create(Self);
+  FGooglePage.OnAccountsChanged := GoogleAccountsChanged;
+  AddPage('google', 'Configuração', IconUser, FGooglePage);
+  // Contas e preferências das Issues numa tela de Configuração; o painel delas vai para Hoje.
+  FIssuesConfig := THostPage.Create(Self);
+  FIssuesConfig.Caption := 'Issues';
+  FIssuesConfig.Hint := 'Contas do GitHub, Jira, GitLab e Azure DevOps e as preferências de busca e aviso.';
+  AddPage('issues-config', 'Configuração', IconIssues, FIssuesConfig);
+  FIssuesPage.DetachPages(LDashboard, LAccounts, LIssueSettings);
+  FIssuesConfig.AddView('Contas', LAccounts);
+  FIssuesConfig.AddView('Preferências', LIssueSettings);
+  // O painel antigo das Issues sai de cena: o Hoje tem o próprio, com e-mail e agenda juntos.
+  LDashboard.Visible := False;
+  LDashboard.Parent := FDigestPage;
+  FDigestPage.OnImportantMails :=
+    function: TMailMsgs
+    begin
+      Result := FMailPage.UnreadMails;
+    end;
+  FDigestPage.OnOpenMail :=
+    procedure(AId: string)
+    begin
+      ShowPage('mail');
+      FMailPage.OpenMessage(AId);
+    end;
+  FDigestPage.OnOpenIssue :=
+    procedure(AItem: TItem)
+    begin
+      FIssuesPage.OpenIssue(AItem);
+    end;
+  FDigestPage.OnNavigate :=
+    procedure(AId: string)
+    begin
+      ShowPage(AId);
+    end;
+  FIssuesPage.OnNavigate :=
+    procedure(APage: Integer)
+    begin
+      case APage of
+        0: ShowPage('home');
+        2, 3:
+          begin
+            ShowPage('issues-config');
+            FIssuesConfig.ShowTab(APage - 2);
+          end;
+      end;
+      ShowWindow_;
+    end;
   FSettingsPage := TAISettingsPage.Create(Self);
   FSettingsPage.OnVoiceChanged := VoiceSettingChanged;
   FSettingsPage.OnVoiceTalk := VoiceMenuClick;
   AddPage('ai', 'Configuração', IconSparkles, FSettingsPage);
+  FSettingsPage.HostAiCards(FIssuesPage.TakeAiSettings);
+  FSettingsPage.OnCostsShown := IssuesAiUsage;
+  FIssuesPage.OnScreenContext :=
+    function: string
+    begin
+      Result := ScreenContext;
+    end;
+  RegisterDevboxTools;
+  FIssuesPage.OnPaletteCommands :=
+    procedure(APalette: TUICommandPalette)
+    begin
+      PaletteCommands(APalette);
+    end;
+  FIssuesPage.RefreshPalette;
 
   // Criado por último: é destruído primeiro (o microfone para antes das telas).
   FVoice := TVoiceAssistant.Create(Self);
@@ -301,6 +401,7 @@ begin
       Result.Accounts := LoadMailAccounts;
       Result.Today := FAgendaPage.TodayEvents;
       Result.Upcoming := FAgendaPage.AllEvents;
+      Result.Issues := FIssuesPage.OpenItems;
       Result.Now := Now;
     end;
   FVoice.OnAction :=
@@ -314,7 +415,7 @@ begin
           if FocusActive then
             FFocusPage.Toggle;
         vaAbrir:
-          if FPages.ContainsKey(AReply.Page) then
+          if PageExists(AReply.Page) then
           begin
             ShowPage(AReply.Page);
             ShowWindow_;
@@ -326,13 +427,19 @@ begin
     begin
       if not AppClosing then
         ApplyVoiceSetting(False);
+      // Teste: DEVBOX_ASSISTANT_ASK abre o assistente e já pergunta (ver o chat sem clicar).
+      if GetEnvironmentVariable('DEVBOX_ASSISTANT_ASK') <> '' then
+      begin
+        FIssuesPage.Assistant.Open;
+        FIssuesPage.Assistant.Ask(GetEnvironmentVariable('DEVBOX_ASSISTANT_ASK'));
+      end;
     end);
 
   ApplyThemeColors;
   UITheme.AddChangeListener(ThemeChanged);
   // Devbox.exe -show -page settings: abre direto numa tela (atalho e teste de tela).
-  if not FindCmdLineSwitch('page', LStartPage, True, [clstValueNextParam]) or not FPages.ContainsKey(LStartPage) then
-    LStartPage := 'clipboard';
+  if not FindCmdLineSwitch('page', LStartPage, True, [clstValueNextParam]) or not PageExists(LStartPage) then
+    LStartPage := 'home';
   ShowPage(LStartPage);
 end;
 
@@ -340,6 +447,7 @@ destructor TMainForm.Destroy;
 begin
   AppClosing := True;
   NotifyHandler := nil;
+  ShortcutsChanged := nil;
   UITheme.RemoveChangeListener(ThemeChanged);
   FPages.Free;
   FPageOrder.Free;
@@ -361,10 +469,28 @@ begin
   FPageOrder.Add(AID);
 end;
 
-procedure TMainForm.ShowPage(const AID: string);
+function TMainForm.PageExists(const AID: string): Boolean;
+begin
+  Result := FPages.ContainsKey(AID) or MatchText(AID, ['clipboard', 'expander', 'digest']);
+end;
+
+procedure TMainForm.ShowPage(AID: string);
 var
   Page: TDevPage;
 begin
+  // Nomes antigos (voz, -page): o clipboard virou aba de Ferramentas e o resumo virou Hoje.
+  if MatchText(AID, ['clipboard', 'expander']) then
+  begin
+    ShowPage('tools');
+    if SameText(AID, 'clipboard') then
+      FToolsPage.ShowTab(ttClip)
+    else
+      FToolsPage.ShowTab(ttExpander);
+    FillFooter;
+    Exit;
+  end;
+  if SameText(AID, 'digest') then
+    AID := 'home';
   if not FPages.TryGetValue(AID, Page) or (Page = FActive) then
     Exit;
   if FActive <> nil then
@@ -379,6 +505,58 @@ begin
   if FSidebar.ActiveItemID <> AID then
     FSidebar.ActiveItemID := AID;
   Page.PageShown;
+  // O assistente (FAB) fica no canto do rodapé, fora do conteúdo das telas.
+  FIssuesPage.AttachAssistant(FFooter.Parent, ScaleValue(14), ScaleValue(0));
+  FillFooter;
+end;
+
+procedure TMainForm.FillFooter;
+var
+  LItems: TArray<TDevShortcut>;
+  LItem: TDevShortcut;
+  LKbd: TUIKbd;
+  LLabel: TUILabel;
+  LIndex: Integer;
+begin
+  while FFooter.ControlCount > 0 do
+    FFooter.Controls[0].Free;
+  LItems := nil;
+  if FActive.Refreshable then
+    LItems := [DevShortcut('F5', 'Atualizar', procedure begin FActive.PageRefresh; end)];
+  LItems := LItems + FActive.PageShortcuts + [
+    DevShortcut('Ctrl+K', 'Comandos', procedure begin FIssuesPage.OpenPalette; end),
+    DevShortcut('Win+Alt+B', 'Clipboard', procedure begin ShowPage('clipboard'); end),
+    DevShortcut('Esc', 'Esconder', procedure begin Hide; end)];
+  FFooterActions := nil;
+  for LIndex := 0 to High(LItems) do
+  begin
+    LItem := LItems[LIndex];
+    LKbd := TUIKbd.Create(Self);
+    LKbd.Shortcut := LItem.Keys;
+    LKbd.AlignWithMargins := True;
+    LKbd.Margins.SetBounds(IfThen(LIndex = 0, 0, ScaleValue(18)), ScaleValue(11), ScaleValue(6), ScaleValue(11));
+    LKbd.Left := (LIndex * 2 + 1) * 1000;
+    LKbd.Align := alLeft;
+    LKbd.Parent := FFooter;
+    LLabel := TUILabel.Create(Self);
+    LLabel.Caption := LItem.Caption;
+    LLabel.Variant := lvMuted;
+    LLabel.AutoSize := True;
+    LLabel.Cursor := crHandPoint;
+    LLabel.Tag := LIndex;
+    LLabel.Left := (LIndex * 2 + 2) * 1000;
+    LLabel.Align := alLeft;
+    LLabel.Parent := FFooter;
+    // Clicar no texto faz o mesmo que a tecla.
+    TFooterLabel(LLabel).OnClick := FooterClick;
+    FFooterActions := FFooterActions + [LItem.Action];
+  end;
+end;
+
+procedure TMainForm.FooterClick(Sender: TObject);
+begin
+  // Na próxima volta: a ação pode trocar de tela e refazer o rodapé (o rótulo clicado some).
+  ForceQueueUI(FFooterActions[TComponent(Sender).Tag]);
 end;
 
 procedure TMainForm.SidebarChange(Sender: TObject);
@@ -449,10 +627,20 @@ begin
   FSubtitle.Align := alTop;
   FSubtitle.Parent := Texts;
 
+  // Rodapé com os atalhos da tela da frente (como era no Vigia).
+  FFooter := TPanel.Create(Self);
+  FFooter.BevelOuter := bvNone;
+  FFooter.ParentBackground := False;
+  FFooter.Height := ScaleValue(44);
+  // Direita livre: o botão redondo do assistente fica ali.
+  FFooter.Padding.SetBounds(ScaleValue(20), 0, ScaleValue(110), 0);
+  FFooter.Align := alBottom;
+  FFooter.Parent := Right;
+
   FContent := TPanel.Create(Self);
   FContent.BevelOuter := bvNone;
   FContent.ParentBackground := False;
-  FContent.Padding.SetBounds(ScaleValue(20), ScaleValue(8), ScaleValue(20), ScaleValue(14));
+  FContent.Padding.SetBounds(ScaleValue(20), ScaleValue(8), ScaleValue(20), ScaleValue(24));
   FContent.Align := alClient;
   FContent.Parent := Right;
 end;
@@ -476,6 +664,7 @@ begin
   AddItem('Modo foco', FocusMenuClick);
   FFocusItem := FTrayMenu.Items[FTrayMenu.Items.Count - 1];
   AddItem('Falar com o Devbox', VoiceMenuClick);
+  AddItem('Pomodoro: começar ou pausar', PomodoroMenuClick);
   AddItem('-', nil);
   AddItem('Sair', MenuExitClick);
   FTray := TTrayIcon.Create(Self);
@@ -551,7 +740,13 @@ procedure TMainForm.WndProc(var Message: TMessage);
 var
   Prev: HWND;
 begin
-  if (WM_DEVBOX_SHOW <> 0) and (Message.Msg = WM_DEVBOX_SHOW) then
+  // O painel lateral (e-mail, logs) anda e some junto com a janela.
+  if (Message.Msg = WM_WINDOWPOSCHANGED) or (Message.Msg = WM_SIZE) then
+  begin
+    inherited;
+    SidePeekFollow(Self);
+  end
+  else if (WM_DEVBOX_SHOW <> 0) and (Message.Msg = WM_DEVBOX_SHOW) then
     MenuOpenClick(nil)
   else if (Message.Msg = WM_HOTKEY) and (Message.WParam = HotkeyId) then
   begin
@@ -604,8 +799,77 @@ begin
   FAgendaPage.Reload;
 end;
 
+procedure TMainForm.PomodoroMenuClick(Sender: TObject);
+begin
+  FPomodoro.Toggle;
+end;
+
+{ Uma função por tela: o laço reaproveitaria a mesma variável em todas. }
+function TMainForm.PageCommand(const AId: string): TProc;
+begin
+  Result :=
+    procedure
+    begin
+      ShowPage(AId);
+    end;
+end;
+
+{ Paleta (Ctrl+K, de qualquer tela): telas do Devbox e as ações mais usadas. }
+procedure TMainForm.PaletteCommands(APalette: TObject);
+var
+  LPalette: TUICommandPalette;
+  LId: string;
+begin
+  LPalette := TUICommandPalette(APalette);
+  for LId in FPageOrder do
+    LPalette.AddCommand('Telas / ' + FPages[LId].Caption, PageCommand(LId));
+  LPalette.AddCommand('Telas / Clipboard', procedure begin ShowPage('clipboard'); end);
+  LPalette.AddCommand('Telas / Expansor de texto', procedure begin ShowPage('expander'); end);
+  LPalette.AddCommand('Devbox / Ligar ou desligar o modo foco', procedure begin FFocusPage.Toggle; end);
+  LPalette.AddCommand('Devbox / Pomodoro: começar ou pausar', procedure begin FPomodoro.Toggle; end);
+  LPalette.AddCommand('Devbox / Resumo do meu dia (assistente)',
+    procedure
+    begin
+      FIssuesPage.Assistant.Open;
+      FIssuesPage.Assistant.Ask('Me dê o resumo do meu dia: agenda, e-mails importantes e issues que pedem atenção.');
+    end);
+  LPalette.AddCommand('Devbox / Capturar região da tela', procedure begin PostToHelper(WM_HELPER_CAPTURE); end);
+  LPalette.AddCommand('Devbox / Falar com o Devbox', procedure begin FVoice.Trigger; end);
+  LPalette.AddCommand('Devbox / Novo snippet',
+    procedure
+    begin
+      ShowPage('expander');
+      FExpanderPage.EditSnippetById(0);
+    end);
+end;
+
+function TMainForm.NewPomodoro: TPomodoroPage;
+begin
+  Result := TPomodoroPage.Create(Self);
+  Result.OnStatus :=
+    procedure(AText: string)
+    begin
+      if AText <> '' then
+        FTray.Hint := 'Devbox  ·  ' + AText
+      else
+        FocusChanged(nil);  // volta a dica normal
+    end;
+  Result.OnWorkStart :=
+    procedure(AMinutes: Integer)
+    begin
+      FFocusPage.StartTimed(AMinutes, 'Pomodoro');
+    end;
+  Result.OnWorkStop :=
+    procedure
+    begin
+      if FocusActive then
+        FFocusPage.StopBy('Pomodoro');
+    end;
+end;
+
 procedure TMainForm.EditSnippet(AId: Integer);
 begin
+  ShowPage('expander');
   FExpanderPage.EditSnippetById(AId);
 end;
 
@@ -707,6 +971,165 @@ begin
   ShowWindow_;
 end;
 
+{ Agenda de hoje e e-mails não lidos, em texto, para o assistente resumir. }
+function TMainForm.MyDayText: string;
+const
+  CMaxMails = 15;
+var
+  LEvent: TCalEvent;
+  LMsg: TMailMsg;
+  LMails: TMailMsgs;
+  LCount: Integer;
+begin
+  Result := 'Agora: ' + FormatDateTime('dddd dd/mm hh:nn', Now) + sLineBreak + 'Agenda de hoje:' + sLineBreak;
+  for LEvent in FAgendaPage.TodayEvents do
+    if LEvent.AllDay then
+      Result := Result + '- dia todo: ' + LEvent.Title + sLineBreak
+    else
+      Result := Result + Format('- %s-%s: %s%s', [FormatDateTime('hh:nn', LEvent.Start),
+        FormatDateTime('hh:nn', LEvent.Finish), LEvent.Title, IfThen(LEvent.MeetUrl <> '', ' (Meet)', '')]) +
+        sLineBreak;
+  LMails := FMailPage.UnreadMails;
+  Result := Result + Format('E-mails não lidos: %d', [Length(LMails)]) + sLineBreak;
+  LCount := 0;
+  for LMsg in LMails do
+    if LMsg.Important then
+    begin
+      Result := Result + Format('- [importante] %s, de %s: %s', [LMsg.Subject, LMsg.FromName, LMsg.Snippet]) +
+        sLineBreak;
+      Inc(LCount);
+      if LCount = CMaxMails then
+        Break;
+    end;
+  for LMsg in LMails do
+    if not LMsg.Important and (LCount < CMaxMails) then
+    begin
+      Result := Result + Format('- %s, de %s: %s', [LMsg.Subject, LMsg.FromName, LMsg.Snippet]) + sLineBreak;
+      Inc(LCount);
+    end;
+end;
+
+function TMainForm.ScreenContext: string;
+begin
+  if FActive = nil then
+    Exit('');
+  Result := 'Tela aberta no Devbox: ' + FActive.Caption + '.';
+  if FActive.PageContext <> '' then
+    Result := Result + sLineBreak + FActive.PageContext;
+end;
+
+{ O que antes eram botões de IA nas telas (Clipboard, logs, Comando por IA) o assistente faz:
+  lê a tela, copia o resultado e roda comando com confirmação. }
+procedure TMainForm.RegisterDevboxTools;
+const
+  CRunTimeoutMs = 60000;
+  CMaxOutput = 8000;
+var
+  LDef: TUIAssistantToolDef;
+begin
+  FIssuesPage.Assistant.Tools.Register('devbox_tela_atual',
+    'Lê o que está aberto no Devbox agora: o item escolhido no Clipboard, o e-mail aberto ou o log aberto.',
+    function(const AArgs: TJSONObject): string
+    var
+      LText: string;
+    begin
+      if TThread.CurrentThread.ThreadID = MainThreadID then
+        LText := ScreenContext
+      else
+        TThread.Synchronize(nil,
+          procedure
+          begin
+            LText := ScreenContext;
+          end);
+      Result := LText;
+    end);
+
+  FIssuesPage.Assistant.Tools.Register('devbox_meu_dia',
+    'Agenda de hoje e e-mails não lidos (importantes primeiro). Use para o resumo do dia, junto com as issues ' +
+    'que você já conhece.',
+    function(const AArgs: TJSONObject): string
+    var
+      LText: string;
+    begin
+      if TThread.CurrentThread.ThreadID = MainThreadID then
+        LText := MyDayText
+      else
+        TThread.Synchronize(nil,
+          procedure
+          begin
+            LText := MyDayText;
+          end);
+      Result := LText;
+    end);
+
+  LDef := FIssuesPage.Assistant.Tools.Register('devbox_copiar',
+    'Põe um texto no Clipboard do Windows (tradução, resumo, mensagem de commit, comando...).',
+    function(const AArgs: TJSONObject): string
+    var
+      LText: string;
+    begin
+      LText := AArgs.GetValue<string>('texto', '');
+      TThread.Synchronize(nil,
+        procedure
+        begin
+          Clipboard.AsText := LText;
+        end);
+      Result := 'copiado';
+    end);
+  LDef.AddParam('texto', pkString, 'O texto a copiar', True);
+
+  LDef := FIssuesPage.Assistant.Tools.Register('devbox_rodar_comando',
+    'Roda um comando no PC do usuário e devolve a saída. Use para responder perguntas sobre a máquina ou fazer o ' +
+    'que ele pediu. Prefira comandos que só leem; o usuário confirma antes de rodar.',
+    function(const AArgs: TJSONObject): string
+    var
+      LShell, LCommand, LLine, LOutput: string;
+      LCode: Integer;
+      LTask: ITask;
+    begin
+      LShell := LowerCase(AArgs.GetValue<string>('shell', 'powershell'));
+      LCommand := AArgs.GetValue<string>('comando', '');
+      if LShell = 'cmd' then
+        LLine := 'cmd.exe /c ' + LCommand
+      else if LShell = 'wsl' then
+        LLine := 'wsl.exe -e sh -c "' + StringReplace(LCommand, '"', '\"', [rfReplaceAll]) + '"'
+      else
+        LLine := 'powershell.exe -NoProfile -Command "' + StringReplace(LCommand, '"', '\"', [rfReplaceAll]) + '"';
+      LTask := TTask.Run(
+        procedure
+        begin
+          try
+            LCode := RunCapture(LLine, LOutput, CRunTimeoutMs);
+          except
+            on E: Exception do
+            begin
+              LCode := -3;
+              LOutput := E.Message;
+            end;
+          end;
+        end);
+      // Na thread da tela: espera sem travar a janela.
+      if TThread.CurrentThread.ThreadID = MainThreadID then
+        while LTask.Status in [TTaskStatus.Created, TTaskStatus.WaitingToRun, TTaskStatus.Running] do
+        begin
+          Application.ProcessMessages;
+          Sleep(20);
+        end
+      else
+        LTask.Wait;
+      LOutput := StringReplace(TrimRight(LOutput), #13, '', [rfReplaceAll]);
+      Result := Format('código de saída %d' + sLineBreak + '%s', [LCode, Copy(LOutput, Max(1, Length(LOutput) -
+        CMaxOutput), CMaxOutput)]);
+    end, True);
+  LDef.AddParam('shell', pkString, 'powershell, cmd ou wsl', True);
+  LDef.AddParam('comando', pkString, 'O comando, numa linha', True);
+end;
+
+procedure TMainForm.IssuesAiUsage(Sender: TObject);
+begin
+  FIssuesPage.RefreshAiUsage;
+end;
+
 procedure TMainForm.IssuesCheckUpdates(Sender: TObject);
 begin
   FIssuesPage.CheckUpdatesNow;
@@ -765,13 +1188,21 @@ end;
 
 procedure TMainForm.FormKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
 begin
-  if Key = VK_ESCAPE then
+  // A tela tem a primeira palavra (Esc fecha o detalhe das Issues antes de esconder).
+  if (FActive <> nil) and FActive.PageKey(Key, Shift) then
+    Key := 0
+  else if Key = VK_ESCAPE then
   begin
-    Hide;
+    // Com o painel lateral aberto, Esc fecha só ele.
+    if not SidePeekCloseAny then
+      Hide;
     Key := 0;
   end
-  else if (FActive <> nil) and FActive.PageKey(Key, Shift) then
+  else if (Key = VK_F5) and (FActive <> nil) and FActive.Refreshable then
+  begin
+    FActive.PageRefresh;
     Key := 0;
+  end;
 end;
 
 initialization

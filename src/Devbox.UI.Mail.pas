@@ -1,7 +1,8 @@
 unit Devbox.UI.Mail;
 
 { E-mail: caixa de entrada das contas Google e IMAP ligadas, aviso de e-mail
-  novo e organização por IA. A IA só sugere; nada muda na caixa sem o clique
+  novo e organização por IA. A lista ocupa a tela; o e-mail abre num painel ao
+  lado da janela (TSidePeek). A IA só sugere; nada muda na caixa sem o clique
   em Aplicar. As contas falam pela Devbox.MailSource. }
 
 interface
@@ -20,6 +21,7 @@ uses
   Devbox.Store,
   Devbox.Google,
   Devbox.MailSource,
+  Devbox.UI.SidePeek,
   Devbox.UI.Kit;
 
 type
@@ -31,6 +33,8 @@ type
     FSubject: TUILabel;
     FMeta: TUILabel;
     FBody: TUICode;
+    FDetail: TPanel;
+    FPeek: TSidePeek;
     FOrganizeBtn: TUIButton;
     FAccounts: TMailAccounts;
     FMsgs: TDictionary<string, TMailMsg>;
@@ -46,6 +50,7 @@ type
     procedure FillAccounts;
     procedure FillList;
     procedure ShowDetail(const AMsg: TMailMsg);
+    procedure OpenPeek;
     procedure UpdateStatus;
     function AccountIndex(const AEmail: string): Integer;
     function TagsOf(const AMsg: TMailMsg): TArray<string>;
@@ -69,6 +74,15 @@ type
     function AccountOf(const AEmail: string; out AAccount: TMailAccount): Boolean;
   public
     constructor Create(AOwner: TComponent); override;
+    procedure PageRefresh; override;
+    procedure PageHidden; override;
+    function PageKey(var AKey: Word; AShift: TShiftState): Boolean; override;
+    function PageShortcuts: TArray<TDevShortcut>; override;
+    function PageContext: string; override;
+    { Não lidos de todas as contas (o Hoje mostra). }
+    function UnreadMails: TMailMsgs;
+    { Abre o e-mail no painel lateral (clique no Hoje). }
+    procedure OpenMessage(const AId: string);
     destructor Destroy; override;
     { Contas mudaram: relê a lista delas e busca de novo. }
     procedure Reload;
@@ -77,6 +91,7 @@ type
 implementation
 
 uses
+  Winapi.Windows,
   System.StrUtils,
   System.Math,
   System.UITypes,
@@ -84,6 +99,7 @@ uses
   System.Threading,
   System.Generics.Defaults,
   Vcl.Controls,
+  Vcl.Forms,
   UI.Toast,
   UI.Tokens,
   UI.ScrollArea,
@@ -98,9 +114,9 @@ const
   CRefreshMs = 5 * 60 * 1000;
   CNotifyMs = 2 * 60 * 1000;
   CAllAccounts = 'Todas as contas';
-  CDetailW = 440;
+  CDetailW = 520;
   CBodyLineH = 17;
-  CBodyCharsPerLine = 62;
+  CBodyCharsPerLine = 74;
 
 function NoteOf(const S: TMailSuggestion; out ATone: TUISemanticTone): string;
 begin
@@ -134,6 +150,7 @@ var
   Scroll: TUIScrollArea;
 begin
   inherited Create(AOwner);
+  FRefreshable := True;
   Caption := 'E-mail';
   Hint := 'Caixa de entrada das suas contas (Google e IMAP). A IA sugere; você escolhe o que aplicar.';
   FMsgs := TDictionary<string, TMailMsg>.Create;
@@ -149,14 +166,14 @@ begin
   FAccountSel.Margins.SetBounds(0, 0, ScaleValue(8), 0);
   FAccountSel.Align := alLeft;
   FAccountSel.Parent := Bar;
-  NewButton(Bar, 'Atualizar', RefreshClick);
   FOrganizeBtn := NewButton(Bar, 'Organizar com IA', OrganizeClick, bvPrimary);
   NewButton(Bar, 'Aplicar sugestões', ApplyClick);
   FStatus := NewHint(Self, '');
 
-  Right := NewPanel(Self, alRight);
-  Right.Width := ScaleValue(CDetailW);
-  Right.Padding.SetBounds(ScaleValue(14), 0, 0, 0);
+  // O detalhe vai para o painel lateral no primeiro clique (OpenPeek).
+  Right := NewPanel(Self, alClient);
+  Right.Parent := nil;
+  FDetail := Right;
   FSubject := TUILabel.Create(Self);
   FSubject.Bold := True;
   FSubject.FontSize := 15;
@@ -181,7 +198,6 @@ begin
   FBody.Parent := Scroll.InnerPanel;
 
   FList := TUIMailList.Create(Self);
-  FList.MultiSelect := True;
   FList.OnItemClick := ItemClick;
   FList.OnItemDblClick := ItemDblClick;
   FList.Top := 100000;
@@ -219,7 +235,7 @@ begin
   begin
     FMsgs.Clear;
     FillList;
-    FStatus.Caption := 'Nenhuma conta ligada. Adicione uma em Contas.';
+    FStatus.Caption := 'Nenhuma conta ligada. Adicione uma em Configuração › E-mail e agenda.';
     Exit;
   end;
   RefreshClick(nil);
@@ -496,6 +512,7 @@ begin
     Exit;
   FCurrent := M.Id;
   ShowDetail(M);
+  OpenPeek;
   if M.Body <> '' then
     Exit;
   TTask.Run(
@@ -551,6 +568,85 @@ begin
   for L in FBody.Text.Split([#10]) do
     Inc(Lines, 1 + Length(L) div CBodyCharsPerLine);
   FBody.Height := ScaleValue(Max(300, Lines * CBodyLineH + 40));
+end;
+
+procedure TMailPage.OpenPeek;
+begin
+  if FPeek = nil then
+  begin
+    FPeek := TSidePeek.CreatePeek(GetParentForm(Self), CDetailW);
+    FPeek.Title := 'E-mail';
+    FDetail.Parent := FPeek.Body;
+  end;
+  FPeek.Open;
+end;
+
+function TMailPage.PageKey(var AKey: Word; AShift: TShiftState): Boolean;
+begin
+  Result := (AKey = VK_DELETE) and (FCurrent <> '') and FSuggest.ContainsKey(FCurrent);
+  if Result then
+  begin
+    FSuggest.Remove(FCurrent);
+    FillList;
+  end;
+end;
+
+function TMailPage.UnreadMails: TMailMsgs;
+var
+  LMsg: TMailMsg;
+begin
+  Result := nil;
+  for LMsg in FMsgs.Values do
+    if LMsg.Unread then
+      Result := Result + [LMsg];
+end;
+
+procedure TMailPage.OpenMessage(const AId: string);
+var
+  LItem: TUIVListItem;
+  LIndex: Integer;
+begin
+  for LIndex := 0 to FList.ItemCount - 1 do
+    if FList.GetItem(LIndex).ID = AId then
+    begin
+      FList.SelectIndex(LIndex);
+      FList.ScrollToIndex(LIndex);
+      Break;
+    end;
+  LItem := Default(TUIVListItem);
+  LItem.ID := AId;
+  ItemClick(nil, -1, LItem);
+end;
+
+function TMailPage.PageContext: string;
+const
+  CMaxChars = 6000;
+var
+  LMsg: TMailMsg;
+begin
+  Result := '';
+  if (FPeek <> nil) and FPeek.IsOpen and FMsgs.TryGetValue(FCurrent, LMsg) then
+    Result := Format('E-mail aberto: "%s", de %s <%s>, %s.', [LMsg.Subject, LMsg.FromName, LMsg.FromEmail,
+      FormatDateTime('dd/mm/yyyy hh:nn', LMsg.Date)]) + sLineBreak +
+      Copy(IfThen(LMsg.Body <> '', LMsg.Body, LMsg.Snippet), 1, CMaxChars);
+end;
+
+function TMailPage.PageShortcuts: TArray<TDevShortcut>;
+begin
+  Result := [DevShortcut('Delete', 'Descartar sugestão da IA', procedure
+    var
+      LKey: Word;
+    begin
+      LKey := VK_DELETE;
+      PageKey(LKey, []);
+    end)];
+end;
+
+procedure TMailPage.PageHidden;
+begin
+  if FPeek <> nil then
+    FPeek.Close_;
+  inherited;
 end;
 
 procedure TMailPage.ItemDblClick(Sender: TObject; AIndex: Integer; const AItem: TUIVListItem);
@@ -685,16 +781,12 @@ begin
             if FMsgs.ContainsKey(S.Id) then
               FSuggest.AddOrSetValue(S.Id, S);
           FillList;
-          // Já deixa marcadas as que têm ação; o usuário tira o que não quiser.
           Acts := 0;
           for Idx := 0 to FList.ItemCount - 1 do
             if FSuggest.TryGetValue(FList.GetItem(Idx).ID, S) and (S.Action <> maKeep) then
-            begin
-              FList.SelectIndex(Idx);
               Inc(Acts);
-            end;
-          TUIToastManager.Show(Format('%d sugestões marcadas. Revise e clique em Aplicar.', [Acts]), ttSuccess,
-            6000);
+          TUIToastManager.Show(Format('%d sugestões. Delete descarta a do e-mail aberto; Aplicar faz o resto.',
+            [Acts]), ttSuccess, 6000);
         end);
     end);
 end;
@@ -709,17 +801,20 @@ type
 var
   Jobs: TArray<TJob>;
   Job: TJob;
-  Info: TUIMailInfo;
+  M: TMailMsg;
   Labels: TDictionary<string, TMailLabels>;
 begin
   Jobs := nil;
-  for Info in FList.SelectedMails do
-    if FMsgs.TryGetValue(Info.ID, Job.Msg) and FSuggest.TryGetValue(Info.ID, Job.Sug) and
-      (Job.Sug.Action <> maKeep) and AccountOf(Job.Msg.Account, Job.Acc) then
+  // Todas as sugestões com ação da lista (as que o usuário não quis, ele descartou com Delete).
+  for M in ShownMsgs do
+    if FSuggest.TryGetValue(M.Id, Job.Sug) and (Job.Sug.Action <> maKeep) and AccountOf(M.Account, Job.Acc) then
+    begin
+      Job.Msg := M;
       Jobs := Jobs + [Job];
+    end;
   if Jobs = nil then
   begin
-    TUIToastManager.Show('Marque e-mails com sugestão (Organizar com IA antes)', ttInfo, 3500);
+    TUIToastManager.Show('Nenhuma sugestão para aplicar (Organizar com IA antes)', ttInfo, 3500);
     Exit;
   end;
   // Cópia para a thread: rótulos criados lá entram nela, não no cache da tela.
@@ -828,6 +923,11 @@ begin
       end;
   end;
   UpdateStatus;
+end;
+
+procedure TMailPage.PageRefresh;
+begin
+  RefreshClick(nil);
 end;
 
 end.

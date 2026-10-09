@@ -1,6 +1,6 @@
 unit Devbox.UI.Tools;
 
-{ Ferramentas: captura de tela para bug, comparar .env e log ao vivo. }
+{ Ferramentas: clipboard, expansor de texto, captura de tela para bug, comparar .env e log ao vivo. }
 
 interface
 
@@ -20,15 +20,19 @@ uses
   UI.VirtualList,
   UI.DataTable,
   Devbox.Tools,
+  Devbox.UI.Clipboard,
+  Devbox.UI.Expander,
   Devbox.UI.Kit;
 
 type
-  TToolTab = (ttCapture, ttEnv, ttLog);
+  TToolTab = (ttClip, ttExpander, ttCapture, ttEnv, ttLog);
 
   TToolsPage = class(TDevPage)
   private
     FTabs: TUITabs;
     FViews: array[TToolTab] of TPanel;
+    FEmbedded: array[TToolTab] of TDevPage;  // telas que moram numa aba (clipboard, expansor)
+    FTab: TToolTab;
     // .env
     FEnvFolder: TUIInput;
     FEnvOnlyMissing: TUIFilterChip;
@@ -45,6 +49,7 @@ type
     FLogTimer: TTimer;
     FLogStatus: TUILabel;
     FLogPaused: Boolean;
+    function NewEmbedded(ATab: TToolTab; APage: TDevPage): TPanel;
     function NewView(ATab: TToolTab; const AHint: string): TPanel;
     function NewBar(AView: TPanel): TPanel;
     function NewPathInput(ABar: TPanel; const ALabel, ASetting: string): TUIInput;
@@ -61,7 +66,14 @@ type
     procedure LogDraw(Sender: TObject; AIndex: Integer; const AItem: TUIVListItem; const ACanvas: ISkCanvas;
       const ARowRect: TRectF);
   public
-    constructor Create(AOwner: TComponent); override;
+    { O clipboard é criado pela janela principal (atalho, snippets) e mora na primeira aba. }
+    constructor Create(AOwner: TComponent; AClipboard: TClipboardPage; AExpander: TExpanderPage); reintroduce;
+    procedure PageShown; override;
+    procedure PageHidden; override;
+    function PageKey(var AKey: Word; AShift: TShiftState): Boolean; override;
+    function PageShortcuts: TArray<TDevShortcut>; override;
+    function PageContext: string; override;
+    procedure ShowTab(ATab: TToolTab);
   end;
 
 implementation
@@ -86,9 +98,10 @@ const
   CLogMax = 5000;
   CLogTickMs = 500;
 
-constructor TToolsPage.Create(AOwner: TComponent);
+constructor TToolsPage.Create(AOwner: TComponent; AClipboard: TClipboardPage; AExpander: TExpanderPage);
 const
-  TabNames: array[TToolTab] of string = ('Captura para bug', 'Comparar .env', 'Log ao vivo');
+  TabNames: array[TToolTab] of string = ('Clipboard', 'Expansor de texto', 'Captura para bug', 'Comparar .env',
+    'Log ao vivo');
 var
   T: TToolTab;
   Bar: TPanel;
@@ -96,13 +109,17 @@ var
 begin
   inherited Create(AOwner);
   Caption := 'Ferramentas';
-  Hint := 'Captura de tela para bug, comparar .env e log ao vivo';
+  Hint := 'Clipboard, expansor de texto, captura de tela para bug, comparar .env e log ao vivo';
   FTabs := TUITabs.Create(Self);
   for T := Low(TToolTab) to High(TToolTab) do
     FTabs.AddTab(TabNames[T]);
   FTabs.Align := alTop;
   FTabs.Parent := Self;
   FTabs.OnChange := TabChange;
+
+  // Clipboard
+  NewEmbedded(ttClip, AClipboard);
+  NewEmbedded(ttExpander, AExpander);
 
   // Captura
   FViews[ttCapture] := NewView(ttCapture, 'Arraste a região, marque com seta, retângulo, texto ou número de passo e ' +
@@ -200,12 +217,72 @@ begin
   Result.Parent := ABar;
 end;
 
+function TToolsPage.NewEmbedded(ATab: TToolTab; APage: TDevPage): TPanel;
+begin
+  Result := NewPanel(Self, alClient);
+  Result.Padding.SetBounds(0, ScaleValue(10), 0, 0);
+  Result.Visible := False;
+  FViews[ATab] := Result;
+  FEmbedded[ATab] := APage;
+  APage.Align := alClient;
+  APage.Parent := Result;
+  APage.Visible := True;  // toda TDevPage nasce escondida
+end;
+
 procedure TToolsPage.TabChange(Sender: TObject; AIndex: Integer);
 var
   T: TToolTab;
 begin
+  if (FEmbedded[FTab] <> nil) and (Ord(FTab) <> AIndex) and Showing then
+    FEmbedded[FTab].PageHidden;
+  FTab := TToolTab(AIndex);
   for T := Low(TToolTab) to High(TToolTab) do
     FViews[T].Visible := Ord(T) = AIndex;
+  if (FEmbedded[FTab] <> nil) and Showing then
+    FEmbedded[FTab].PageShown;
+  if Showing and Assigned(ShortcutsChanged) then
+    ShortcutsChanged();
+end;
+
+procedure TToolsPage.ShowTab(ATab: TToolTab);
+begin
+  FTabs.ActiveIndex := Ord(ATab);
+  TabChange(nil, Ord(ATab));
+end;
+
+procedure TToolsPage.PageShown;
+begin
+  inherited;
+  if FEmbedded[FTab] <> nil then
+    FEmbedded[FTab].PageShown;
+end;
+
+procedure TToolsPage.PageHidden;
+begin
+  if FEmbedded[FTab] <> nil then
+    FEmbedded[FTab].PageHidden;
+  inherited;
+end;
+
+function TToolsPage.PageKey(var AKey: Word; AShift: TShiftState): Boolean;
+begin
+  Result := (FEmbedded[FTab] <> nil) and FEmbedded[FTab].PageKey(AKey, AShift);
+end;
+
+function TToolsPage.PageContext: string;
+begin
+  if FEmbedded[FTab] <> nil then
+    Result := FEmbedded[FTab].PageContext
+  else
+    Result := '';
+end;
+
+function TToolsPage.PageShortcuts: TArray<TDevShortcut>;
+begin
+  if FEmbedded[FTab] <> nil then
+    Result := FEmbedded[FTab].PageShortcuts
+  else
+    Result := nil;
 end;
 
 procedure TToolsPage.CaptureClick(Sender: TObject);

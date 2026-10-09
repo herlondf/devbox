@@ -56,6 +56,10 @@ type
     function NewView(ATab: TCleanTab; const AHint: string): TPanel;
     function NewTable(ATab: TCleanTab): TUIDataTable;
     function NewToolbar(AView: TPanel): TPanel;
+    function NewActionBar(AView: TPanel): TPanel;
+    procedure Analyze(ABar: TPanel; AOnClick: TNotifyEvent);
+    procedure FolderButton(ABar: TPanel; ATab: TCleanTab);
+    procedure CardsResize(Sender: TObject);
     function NewRootInput(ABar: TPanel; const ASetting, ADefault: string): TUIInput;
     function NewSelect(ABar: TPanel; const ACaption: string; const AItems: array of string; AIndex: Integer): TUISelect;
     function SelectedIndices(ATab: TCleanTab): TArray<Integer>;
@@ -97,6 +101,7 @@ type
     procedure StartupOn(Sender: TObject);
   public
     constructor Create(AOwner: TComponent); override;
+    procedure PageRefresh; override;
     procedure PageShown; override;
   end;
 
@@ -137,27 +142,24 @@ var
   C: TUIColorTokens;
 begin
   inherited Create(AOwner);
+  FRefreshable := True;
   Caption := 'Limpeza';
   Hint := 'Espaço que dá para recuperar e o que inicia com o Windows. Nada sai sem você confirmar.';
   C := UITheme.Tokens.Color;
 
+  // Números: dois cartões dividindo a largura.
   Cards := NewPanel(Self, alTop, 112);
   Cards.Padding.SetBounds(0, 0, 0, ScaleValue(12));
+  Cards.OnResize := CardsResize;
   FFound := TUIStat.Create(Self);
-  FFound.CardLabel := 'Encontrado';
+  FFound.CardLabel := 'Encontrado nesta aba';
   FFound.Value := '–';
-  FFound.Width := ScaleValue(240);
-  FFound.Align := alLeft;
+  FFound.Tone := stPrimary;
   FFound.Parent := Cards;
   FFreed := TUIStat.Create(Self);
   FFreed.CardLabel := 'Liberado nesta sessão';
   FFreed.Value := '0 B';
   FFreed.Tone := stSuccess;
-  FFreed.Width := ScaleValue(240);
-  FFreed.AlignWithMargins := True;
-  FFreed.Margins.SetBounds(ScaleValue(12), 0, 0, 0);
-  FFreed.Left := 1000;
-  FFreed.Align := alLeft;
   FFreed.Parent := Cards;
 
   FTabs := TUITabs.Create(Self);
@@ -182,17 +184,20 @@ begin
   FStopBtn.Visible := False;
   FStatus := NewHint(Bar, '', alClient);
 
+  // Cada aba: o que é (uma linha), onde procurar e Analisar em cima; o que fazer com o achado embaixo.
+
   // Lixo de build
   FViews[ctJunk] := NewView(ctJunk, 'node_modules, bin/obj, dcu, __history, target, .gradle e caches de Python ' +
     'de projetos parados. Sai de vez: o próximo build refaz.');
   Bar := NewToolbar(FViews[ctJunk]);
-  NewButton(Bar, 'Analisar', JunkScan, bvPrimary);
-  FJunkDays := NewSelect(Bar, 'Parado há', ['7 dias', '30 dias', '90 dias', '180 dias'], 1);
-  NewButton(Bar, 'Escolher pasta…', PickFolder, bvGhost).Tag := Ord(ctJunk);
+  Analyze(Bar, JunkScan);
+  FJunkDays := NewSelect(Bar, 'Projetos parados há', ['parados há 7 dias', 'parados há 30 dias',
+    'parados há 90 dias', 'parados há 180 dias'], 1);
+  FolderButton(Bar, ctJunk);
   FJunkRoots := NewRootInput(Bar, 'junk_roots', GetEnvironmentVariable('USERPROFILE'));
-  Bar := NewToolbar(FViews[ctJunk]);
+  Bar := NewActionBar(FViews[ctJunk]);
+  NewButton(Bar, 'Apagar selecionados', JunkDelete, bvOutline, alRight);
   NewButton(Bar, 'Selecionar tudo', SelectAllClick, bvGhost).Tag := Ord(ctJunk);
-  NewButton(Bar, 'Apagar selecionados', JunkDelete);
   FTables[ctJunk] := NewTable(ctJunk);
   FTables[ctJunk].AddColumn('project', 'Projeto', 'project', 220);
   FTables[ctJunk].AddColumn('kind', 'Tipo', 'kind', 170);
@@ -204,9 +209,10 @@ begin
   FViews[ctTemp] := NewView(ctTemp, 'Arquivos que o Windows e os programas refazem sozinhos. ' +
     'Feche o navegador antes de limpar o cache dele.');
   Bar := NewToolbar(FViews[ctTemp]);
-  NewButton(Bar, 'Analisar', TempScan, bvPrimary);
+  Analyze(Bar, TempScan);
+  Bar := NewActionBar(FViews[ctTemp]);
+  NewButton(Bar, 'Limpar selecionados', TempDelete, bvOutline, alRight);
   NewButton(Bar, 'Selecionar tudo', SelectAllClick, bvGhost).Tag := Ord(ctTemp);
-  NewButton(Bar, 'Limpar selecionados', TempDelete);
   FTables[ctTemp] := NewTable(ctTemp);
   FTables[ctTemp].AddColumn('name', 'Local', 'name', 260);
   FTables[ctTemp].AddColumn('size', 'Tamanho', 'size', 110, False, caRight);
@@ -214,16 +220,17 @@ begin
   FTables[ctTemp].AddColumn('note', 'Observação', 'note', 420);
 
   // Arquivos grandes
-  FViews[ctBig] := NewView(ctBig, 'Os maiores arquivos a partir da pasta escolhida. "Sem mudar há" usa a data de ' +
-    'modificação. Vai para a Lixeira.');
+  FViews[ctBig] := NewView(ctBig, 'Os maiores arquivos a partir da pasta escolhida. Vai para a Lixeira.');
   Bar := NewToolbar(FViews[ctBig]);
-  NewButton(Bar, 'Analisar', BigScan, bvPrimary);
-  FBigDays := NewSelect(Bar, 'Sem mudar há', ['qualquer data', '90 dias', '180 dias', '1 ano'], 0);
-  FBigSize := NewSelect(Bar, 'A partir de', ['50 MB', '100 MB', '500 MB', '1 GB'], 1);
-  NewButton(Bar, 'Escolher pasta…', PickFolder, bvGhost).Tag := Ord(ctBig);
+  Analyze(Bar, BigScan);
+  FBigSize := NewSelect(Bar, 'Tamanho mínimo', ['a partir de 50 MB', 'a partir de 100 MB', 'a partir de 500 MB',
+    'a partir de 1 GB'], 1);
+  FBigDays := NewSelect(Bar, 'Data de modificação', ['qualquer data', 'sem mudar há 90 dias',
+    'sem mudar há 180 dias', 'sem mudar há 1 ano'], 0);
+  FolderButton(Bar, ctBig);
   FBigRoot := NewRootInput(Bar, 'big_root', GetEnvironmentVariable('USERPROFILE'));
-  Bar := NewToolbar(FViews[ctBig]);
-  NewButton(Bar, 'Mandar para a Lixeira', BigDelete);
+  Bar := NewActionBar(FViews[ctBig]);
+  NewButton(Bar, 'Mandar para a Lixeira', BigDelete, bvOutline, alRight);
   NewButton(Bar, 'Abrir pasta', BigOpenFolder, bvGhost);
   Right := NewPanel(FViews[ctBig], alRight);
   Right.Width := ScaleValue(320);
@@ -246,35 +253,35 @@ begin
   FViews[ctEmpty] := NewView(ctEmpty, 'Pastas sem nenhum arquivo dentro. .git e junções ficam de fora. ' +
     'Vai para a Lixeira.');
   Bar := NewToolbar(FViews[ctEmpty]);
-  NewButton(Bar, 'Analisar', EmptyScan, bvPrimary);
-  NewButton(Bar, 'Escolher pasta…', PickFolder, bvGhost).Tag := Ord(ctEmpty);
+  Analyze(Bar, EmptyScan);
+  FolderButton(Bar, ctEmpty);
   FEmptyRoot := NewRootInput(Bar, 'empty_root', GetEnvironmentVariable('USERPROFILE'));
-  Bar := NewToolbar(FViews[ctEmpty]);
+  Bar := NewActionBar(FViews[ctEmpty]);
+  NewButton(Bar, 'Mandar para a Lixeira', EmptyDelete, bvOutline, alRight);
   NewButton(Bar, 'Selecionar tudo', SelectAllClick, bvGhost).Tag := Ord(ctEmpty);
-  NewButton(Bar, 'Mandar para a Lixeira', EmptyDelete);
   FTables[ctEmpty] := NewTable(ctEmpty);
   FTables[ctEmpty].AddColumn('path', 'Pasta', 'path', 760);
 
   // Containers
   FViews[ctContainers] := NewView(ctContainers, 'Imagens sem tag (sobras de build) e volumes que nenhum ' +
-    'container usa, no Docker do Windows e no Podman/Docker das distros WSL ligadas.');
+    'container usa, no Docker do Windows e nas distros WSL ligadas.');
   Bar := NewToolbar(FViews[ctContainers]);
-  NewButton(Bar, 'Analisar', DanglingScan, bvPrimary);
-  NewButton(Bar, 'Limpar imagens órfãs', DanglingImages);
-  NewButton(Bar, 'Apagar volumes sem uso', DanglingVolumes, bvGhost);
+  Analyze(Bar, DanglingScan);
+  Bar := NewActionBar(FViews[ctContainers]);
+  NewButton(Bar, 'Apagar volumes sem uso', DanglingVolumes, bvGhost, alRight);
+  NewButton(Bar, 'Limpar imagens órfãs', DanglingImages, bvOutline, alRight).Left := 0;
   FTables[ctContainers] := NewTable(ctContainers);
   FTables[ctContainers].AddColumn('where', 'Onde', 'where', 260);
   FTables[ctContainers].AddColumn('images', 'Imagens órfãs', 'images', 120, False, caRight);
   FTables[ctContainers].AddColumn('size', 'Tamanho', 'size', 120, False, caRight);
   FTables[ctContainers].AddColumn('volumes', 'Volumes sem uso', 'volumes', 140, False, caRight);
 
-  // Inicialização
+  // Inicialização (lista lida ao abrir; F5 relê)
   FViews[ctStartup] := NewView(ctStartup, 'Desligar não apaga: é o mesmo liga e desliga do Gerenciador de ' +
     'Tarefas. Itens da máquina precisam de admin.');
-  Bar := NewToolbar(FViews[ctStartup]);
-  NewButton(Bar, 'Atualizar', StartupScan, bvPrimary);
-  NewButton(Bar, 'Desligar', StartupOff);
-  NewButton(Bar, 'Religar', StartupOn);
+  Bar := NewActionBar(FViews[ctStartup]);
+  NewButton(Bar, 'Desligar', StartupOff, bvOutline, alRight);
+  NewButton(Bar, 'Religar', StartupOn, bvGhost, alRight).Left := 0;
   FTables[ctStartup] := NewTable(ctStartup);
   FTables[ctStartup].SelectionMode := tsmSingle;
   FTables[ctStartup].AddColumn('name', 'Programa', 'name', 220);
@@ -299,8 +306,45 @@ end;
 
 function TCleanupPage.NewToolbar(AView: TPanel): TPanel;
 begin
-  Result := NewPanel(AView, alTop, 50);
+  Result := NewPanel(AView, alTop, 52);
   Result.Padding.SetBounds(0, ScaleValue(6), 0, ScaleValue(6));
+end;
+
+{ Ações sobre o que foi achado: embaixo da tabela. }
+function TCleanupPage.NewActionBar(AView: TPanel): TPanel;
+begin
+  Result := NewPanel(AView, alBottom, 52);
+  Result.Padding.SetBounds(0, ScaleValue(10), 0, 0);
+end;
+
+{ Analisar fica na ponta direita da linha de busca. }
+procedure TCleanupPage.Analyze(ABar: TPanel; AOnClick: TNotifyEvent);
+var
+  LButton: TUIButton;
+begin
+  LButton := NewButton(ABar, 'Analisar', AOnClick, bvPrimary, alRight);
+  LButton.AlignWithMargins := True;
+  LButton.Margins.SetBounds(ScaleValue(8), 0, 0, 0);
+end;
+
+procedure TCleanupPage.FolderButton(ABar: TPanel; ATab: TCleanTab);
+var
+  LButton: TUIButton;
+begin
+  LButton := NewButton(ABar, 'Escolher…', PickFolder, bvGhost, alRight);
+  LButton.Tag := Ord(ATab);
+  LButton.Left := 0;
+end;
+
+procedure TCleanupPage.CardsResize(Sender: TObject);
+var
+  LPanel: TPanel;
+  LWidth: Integer;
+begin
+  LPanel := TPanel(Sender);
+  LWidth := (LPanel.ClientWidth - ScaleValue(12)) div 2;
+  FFound.SetBounds(0, 0, LWidth, LPanel.ClientHeight - LPanel.Padding.Bottom);
+  FFreed.SetBounds(LWidth + ScaleValue(12), 0, LWidth, LPanel.ClientHeight - LPanel.Padding.Bottom);
 end;
 
 function TCleanupPage.NewTable(ATab: TCleanTab): TUIDataTable;
@@ -318,12 +362,10 @@ function TCleanupPage.NewRootInput(ABar: TPanel; const ASetting, ADefault: strin
 begin
   Result := TUIInput.Create(Self);
   Result.LabelMode := ilmBorder;
-  Result.LabelText := 'Pastas (separe com ;)';
+  Result.LabelText := 'Onde procurar (pastas separadas por ;)';
   Result.ReserveHintSpace := False;
   Result.Value := Store.GetSetting(ASetting, ADefault);
   Result.HelpKeyword := ASetting;
-  Result.AlignWithMargins := True;
-  Result.Margins.SetBounds(0, 0, ScaleValue(8), 0);
   Result.Align := alClient;
   Result.Parent := ABar;
 end;
@@ -339,11 +381,11 @@ begin
   Result.ItemIndex := AIndex;
   Result.Hint := ACaption;
   Result.ShowHint := True;
-  Result.Width := ScaleValue(150);
+  Result.Width := ScaleValue(190);
   Result.AlignWithMargins := True;
-  Result.Margins.SetBounds(0, 0, ScaleValue(8), 0);
-  Result.Left := 100000;
-  Result.Align := alLeft;
+  Result.Margins.SetBounds(ScaleValue(8), 0, 0, 0);
+  Result.Left := 0;
+  Result.Align := alRight;
   Result.Parent := ABar;
 end;
 
@@ -1066,6 +1108,18 @@ end;
 procedure TCleanupPage.StartupOn(Sender: TObject);
 begin
   StartupToggle(True);
+end;
+
+procedure TCleanupPage.PageRefresh;
+begin
+  case TCleanTab(Max(FTabs.ActiveIndex, 0)) of
+    ctJunk: JunkScan(nil);
+    ctTemp: TempScan(nil);
+    ctBig: BigScan(nil);
+    ctEmpty: EmptyScan(nil);
+    ctContainers: DanglingScan(nil);
+    ctStartup: StartupScan(nil);
+  end;
 end;
 
 end.

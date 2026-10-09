@@ -1,7 +1,9 @@
 unit Devbox.AI;
 
 { IA: uma pergunta, uma resposta. Anthropic (Messages API) ou qualquer
-  endpoint compatível com OpenAI (Ollama, gateway próprio). Sem SDK oficial
+  endpoint compatível com OpenAI (Gemini, Ollama, gateway próprio). A config
+  vem de Configuração › IA (a mesma do assistente das Issues, por AIConfigSource);
+  a antiga "Interna" só vale se aquela não estiver pronta. Sem SDK oficial
   para Delphi, vai por HTTP direto. A chave fica no Credential Manager.
   Bloqueia: chamar fora da thread de UI. }
 
@@ -28,6 +30,13 @@ const
   AIActionNames: array[aaExplain..aaCommit] of string = ('Explicar', 'Resumir', 'Traduzir (pt ↔ en)',
     'Melhorar o texto', 'Mensagem de commit (do diff)');
   DefaultAnthropicModel = 'claude-opus-5-5';
+
+type
+  TAIConfigSource = reference to function(out AConfig: TAIConfig): Boolean;
+
+var
+  { Quem manda na config (Devbox.Issues.AI liga na abertura). False = usa a antiga. }
+  AIConfigSource: TAIConfigSource;
 
 { Lê provedor, endereço e modelo das preferências e a chave do Credential Manager. }
 function LoadAIConfig: TAIConfig;
@@ -77,6 +86,8 @@ end;
 
 function LoadAIConfig: TAIConfig;
 begin
+  if Assigned(AIConfigSource) and AIConfigSource(Result) then
+    Exit;
   Result.Provider := TAIProvider(StrToIntDef(Store.GetSetting('ai_provider', '0'), 0));
   Result.BaseUrl := Store.GetSetting('ai_base_url');
   Result.Model := Store.GetSetting('ai_model', IfThen(Result.Provider = apAnthropic, DefaultAnthropicModel, ''));

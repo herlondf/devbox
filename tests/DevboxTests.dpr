@@ -30,6 +30,9 @@ uses
   Devbox.Issues.Store in '..\src\Devbox.Issues.Store.pas',
   Devbox.Usage in '..\src\Devbox.Usage.pas',
   Devbox.AI in '..\src\Devbox.AI.pas',
+  System.Types,
+  System.Skia,
+  UI.Markdown,
   Devbox.SysInfo in '..\src\Devbox.SysInfo.pas',
   Devbox.Google in '..\src\Devbox.Google.pas',
   Devbox.ICal in '..\src\Devbox.ICal.pas',
@@ -706,7 +709,7 @@ begin
   Check(ParseVoiceIntent('{"acao":"xpto"}', R) and (R.Action = vaConversa), 'voz: ação desconhecida vira conversa');
   Check(not ParseVoiceIntent('sem json', R), 'voz: resposta sem JSON');
   Check(SpokenTime(EncodeTime(9, 30, 0, 0)) + '|' + SpokenTime(EncodeTime(14, 0, 0, 0)) = '9 e 30|14 horas', 'voz: hora falada');
-  Check(AgendaSpeech(nil) = 'Você não tem compromissos hoje.', 'voz: agenda vazia');
+  Check(AgendaSpeech(nil) = 'Hoje você não tem compromissos.', 'voz: agenda vazia');
   E := Default(TCalEvent);
   E.Title := 'Daily';
   E.Start := Date + EncodeTime(9, 30, 0, 0);
@@ -720,6 +723,18 @@ begin
   Check(AgendaSpeech(Ev) = 'Hoje você tem 2 compromissos: às 9 e 30, Daily; às 16 horas, Revisão.', 'voz: agenda falada');
   Check(NextMeetingSpeech(Ev, Date + EncodeTime(15, 0, 0, 0)) =
     'Sua próxima reunião é Revisão, às 16 horas, daqui a 61 minutos. Tem link do Meet na agenda.', 'voz: próxima reunião');
+  Check((ParseVoiceDay('amanha', Date) = Date + 1) and (ParseVoiceDay('2026-10-09', Date) = EncodeDate(2026, 10, 9)) and
+    (ParseVoiceDay('sexta', Date) = 0), 'voz: dia pedido (amanhã, data, inválido)');
+  E.Title := 'Planejamento';
+  E.Start := Date + 1 + EncodeTime(10, 0, 0, 0);
+  E.Finish := E.Start + 1 / 24;
+  E.MeetUrl := '';
+  Check((Length(EventsOn(Ev + [E], Date + 1)) = 1) and (Length(EventsOn(Ev + [E], Date)) = 2), 'voz: eventos por dia');
+  Check(AgendaSpeech(EventsOn(Ev + [E], Date + 1), 'Amanhã') =
+    'Amanhã você tem um compromisso: às 10 horas, Planejamento.', 'voz: agenda de amanhã');
+  Check(ParseVoiceIntent('{"acao":"agenda","dia":"amanha"}', R) and (R.Action = vaAgenda) and (R.Day = Date + 1),
+    'voz: intenção agenda de amanhã');
+  Check(ParseVoiceIntent('{"acao":"issues"}', R) and (R.Action = vaIssues), 'voz: intenção issues');
   Check(NextMeetingSpeech(Ev, Date + EncodeTime(9, 40, 0, 0)) = 'Você está em Daily agora, até 9 e 45.', 'voz: reunião em andamento');
   Check(NormalizeSpeech('Oi, Java!') + '|' + NormalizeSpeech('Ação  Já.') = 'oi java|acao ja', 'voz: texto normalizado');
   Check(WakeMatch('Oi Java, resuma meus e-mails.', 'Oi Java', 0.72, Rest) and (Rest = 'resuma meus e-mails.'),
@@ -802,6 +817,39 @@ begin
   Check(CleanPath(E, False) = 'C:\bin;C:\sumiu;%SystemRoot%\system32', 'PATH: limpo mantendo a que não existe');
 end;
 
+{ DevboxTests -mdpng saida.png: desenha um markdown de exemplo como a bolha do
+  assistente desenha (UI.Markdown), para ver sem chamar IA. }
+procedure MarkdownPng(const AFile: string);
+const
+  CSample = '## Resumo do dia'#10#10'Você tem **3 compromissos** e *2 e-mails* importantes.'#10#10 +
+    '- **09:30** Daily do time'#10'- **14:00** Revisão do `PROJ-12`'#10'  - levar o [relatório](https://x.example)'#10 +
+    '- 16:00 Planejamento com um texto bem mais longo para ver a quebra de linha dentro do item da lista'#10#10 +
+    '1. Responder a Ana'#10'2. Lançar horas na **PROJ-7**'#10#10'---'#10'```'#10'git log --oneline -3'#10'```'#10 +
+    'Texto com * solto e snake_case_nome.';
+  CWidth = 420;
+var
+  LView: TUIMarkdownView;
+  LSurface: ISkSurface;
+  LHeight: Single;
+  LPaint: ISkPaint;
+begin
+  LView := TUIMarkdownView.Create;
+  try
+    LView.Configure('Segoe UI', 'Consolas', 13, $FFE5E7EB, $14E5E7EB);
+    LView.Text := CSample;
+    LHeight := LView.Layout(CWidth);
+    LSurface := TSkSurface.MakeRaster(CWidth + 24, Ceil(LHeight) + 24);
+    LPaint := TSkPaint.Create;
+    LPaint.Color := $FF1F2937;
+    LSurface.Canvas.DrawRect(TRectF.Create(0, 0, CWidth + 24, LHeight + 24), LPaint);
+    LView.Paint(LSurface.Canvas, 12, 12);
+    LSurface.MakeImageSnapshot.EncodeToFile(AFile);
+    Writeln(Format('ok %s (%d px de altura)', [AFile, Ceil(LHeight)]));
+  finally
+    LView.Free;
+  end;
+end;
+
 procedure Bench(const ACmd: string);
 var
   Output: string;
@@ -834,6 +882,11 @@ begin
   if FindCmdLineSwitch('vosk') then
   begin
     RunVoskProbe;
+    Exit;
+  end;
+  if FindCmdLineSwitch('mdpng') then
+  begin
+    MarkdownPng(ParamStr(2));
     Exit;
   end;
   if FindCmdLineSwitch('bench') then

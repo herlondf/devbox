@@ -14,6 +14,7 @@ uses
   UI.Input,
   UI.Tabs,
   UI.DataTable,
+  UI.Toggle,
   Devbox.Store,
   Devbox.ICal,
   Devbox.UI.Kit;
@@ -73,6 +74,7 @@ type
 implementation
 
 uses
+  System.Math,
   System.StrUtils,
   System.Threading,
   UI.Toast,
@@ -130,7 +132,7 @@ var
   I: Integer;
 begin
   inherited Create(AOwner);
-  Caption := 'Contas';
+  Caption := 'E-mail e agenda';
   Hint := 'Contas de e-mail e agendas. Senhas e acessos ficam no Credential Manager, só nesta máquina.';
   FSel := -1;
   FImapSel := -1;

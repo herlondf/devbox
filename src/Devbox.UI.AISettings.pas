@@ -1,6 +1,7 @@
 unit Devbox.UI.AISettings;
 
-{ Configuração › IA: abas Interna (a IA das ações de texto), Voz (aparelhos,
+{ Configuração › IA: abas Provedor (a IA do assistente e das ações de texto; os
+  cartões vêm da tela Issues, que guarda os eventos), Voz (aparelhos,
   frase, motores, conversa ao vivo e o log do que o ouvido entende) e Custos
   (uso e custo das IAs pagas). }
 
@@ -18,6 +19,8 @@ uses
   UI.Labels,
   UI.Code,
   UI.DataTable,
+  UI.Card,
+  UI.Button,
   Devbox.Speech,
   Devbox.UI.Kit;
 
@@ -26,9 +29,6 @@ type
   private
     FTabs: TUITabs;
     FViews: array[0..2] of TUIScrollArea;
-    // Interna
-    FAIProvider: TUISelect;
-    FAIBase, FAIModel, FAIKey: TUIInput;
     // Voz
     FVoiceToggle: TUIToggle;
     FVoiceSense: TUISelect;
@@ -43,12 +43,14 @@ type
     FTestPlayer: TPcmPlayer;
     // Custos
     FCostSummary: TUILabel;
+    FCostsTitle: TUILabel;
     FCostTable: TUIDataTable;
     FPriceModel: TUISelect;
     FPriceText, FMonthCap: TUIInput;
     FTimer: TTimer;
     FOnVoiceChanged: TNotifyEvent;
     FOnVoiceTalk: TNotifyEvent;
+    FOnCostsShown: TNotifyEvent;
     function Body(AIndex: Integer): TWinControl;
     function NewTitle(AParent: TWinControl; const ACaption: string): TUILabel;
     procedure TabChange(Sender: TObject; AIndex: Integer);
@@ -58,10 +60,6 @@ type
     procedure BuildCosts;
     procedure TimerTick(Sender: TObject);
     procedure VoiceChanged;
-    // Interna
-    procedure LoadAIFields;
-    procedure AIProviderChange(Sender: TObject);
-    procedure AISaveClick(Sender: TObject);
     procedure AITestClick(Sender: TObject);
     // Voz
     procedure VoiceToggleChange(Sender: TObject);
@@ -87,9 +85,14 @@ type
     procedure PageShown; override;
     procedure PageHidden; override;
     procedure SetVoiceOn(AOn: Boolean);
+    { Cartões da config de IA (vêm da tela Issues): provedor e IA automática na aba
+      Provedor; o último (uso) no topo da aba Custos. }
+    procedure HostAiCards(const ACards: TArray<TControl>);
     { Interruptor, frase, aparelhos, motor ou conversa mudaram (a janela principal aplica). }
     property OnVoiceChanged: TNotifyEvent read FOnVoiceChanged write FOnVoiceChanged;
     property OnVoiceTalk: TNotifyEvent read FOnVoiceTalk write FOnVoiceTalk;
+    { Aba Custos aberta: quem tem cartão de uso atualiza os números. }
+    property OnCostsShown: TNotifyEvent read FOnCostsShown write FOnCostsShown;
   end;
 
 { Grava no banco o uso de IA que estava na fila (thread de UI). }
@@ -104,7 +107,6 @@ uses
   System.DateUtils,
   System.Threading,
   UI.Toast,
-  UI.Button,
   UI.Audio.Capture,
   Devbox.AI,
   Devbox.Secrets,
@@ -116,7 +118,7 @@ uses
   Devbox.Store;
 
 const
-  CTabNames: array[0..2] of string = ('Interna', 'Voz', 'Custos');
+  CTabNames: array[0..2] of string = ('Provedor', 'Voz', 'Custos');
   CTabInternal = 0;
   CTabVoice = 1;
   CTabCosts = 2;
@@ -200,7 +202,11 @@ begin
     FViews[LIndex].Visible := LIndex = AIndex;
   UpdateContentHeight(AIndex);
   if AIndex = CTabCosts then
+  begin
     RefreshCosts;
+    if Assigned(FOnCostsShown) then
+      FOnCostsShown(Self);
+  end;
 end;
 
 { Altura do conteúdo = fim do último controle (a área de rolagem não mede sozinha). }
@@ -262,91 +268,43 @@ var
   LRow: TPanel;
 begin
   LBody := Body(CTabInternal);
-  NewTitle(LBody, 'IA das ações de texto');
-  NewHint(LBody, 'Usada no botão IA… do Clipboard, em Explicar com IA nos logs, no Comando por IA e no pedido ' +
-    'único por voz. O texto só vai para a IA quando você pede.');
+  NewTitle(LBody, 'Uma IA para tudo');
   LRow := NewPanel(LBody, alTop, 54);
-  LRow.Padding.SetBounds(0, ScaleValue(8), 0, ScaleValue(4));
-  FAIProvider := TUISelect.Create(Self);
-  FAIProvider.Items.Add(AIProviderNames[apAnthropic]);
-  FAIProvider.Items.Add(AIProviderNames[apOpenAI]);
-  FAIProvider.Width := ScaleValue(240);
-  FAIProvider.AlignWithMargins := True;
-  FAIProvider.Margins.SetBounds(0, 0, ScaleValue(8), 0);
-  FAIProvider.Align := alLeft;
-  FAIProvider.Parent := LRow;
-  FAIModel := TUIInput.Create(Self);
-  FAIModel.LabelMode := ilmBorder;
-  FAIModel.LabelText := 'Modelo';
-  FAIModel.ReserveHintSpace := False;
-  FAIModel.Width := ScaleValue(240);
-  FAIModel.AlignWithMargins := True;
-  FAIModel.Margins.SetBounds(0, 0, ScaleValue(8), 0);
-  FAIModel.Left := 1000;
-  FAIModel.Align := alLeft;
-  FAIModel.Parent := LRow;
-  FAIBase := TUIInput.Create(Self);
-  FAIBase.LabelMode := ilmBorder;
-  FAIBase.LabelText := 'Endereço (compatível com OpenAI, ex.: http://localhost:11434/v1)';
-  FAIBase.ReserveHintSpace := False;
-  FAIBase.Align := alClient;
-  FAIBase.Parent := LRow;
-  LRow := NewPanel(LBody, alTop, 54);
-  LRow.Padding.SetBounds(0, ScaleValue(4), 0, ScaleValue(4));
-  NewButton(LRow, 'Testar', AITestClick, bvGhost, alRight);
-  NewButton(LRow, 'Salvar', AISaveClick, bvPrimary, alRight);
-  FAIKey := TUIInput.Create(Self);
-  FAIKey.LabelMode := ilmBorder;
-  FAIKey.LabelText := 'Chave (fica no Credential Manager do Windows, não no banco)';
-  FAIKey.ReserveHintSpace := False;
-  FAIKey.PasswordChar := '*';
-  FAIKey.PasswordToggle := True;
-  FAIKey.Align := alClient;
-  FAIKey.Parent := LRow;
-  LoadAIFields;
-  FAIProvider.OnChange := AIProviderChange;
+  LRow.Padding.SetBounds(0, ScaleValue(4), 0, ScaleValue(8));
+  NewButton(LRow, 'Testar', AITestClick, bvOutline, alRight);
+  NewHint(LRow, 'Assistente (botão redondo), IA… do Clipboard, logs, Comando por IA, resumo do dia e voz.',
+    alClient);
 end;
 
-procedure TAISettingsPage.LoadAIFields;
+procedure TAISettingsPage.HostAiCards(const ACards: TArray<TControl>);
 var
-  C: TAIConfig;
+  LCard: TControl;
+  LTop, LIndex, LChild: Integer;
 begin
-  C := LoadAIConfig;
-  FAIProvider.ItemIndex := Ord(C.Provider);
-  FAIModel.Value := C.Model;
-  FAIBase.Value := C.BaseUrl;
-  FAIBase.Visible := C.Provider = apOpenAI;
-  // A chave não volta para a tela: só se sabe que existe.
-  FAIKey.Value := '';
-  if C.Key <> '' then
-    FAIKey.LabelText := 'Chave salva no Credential Manager (deixe em branco para manter)'
-  else
-    FAIKey.LabelText := 'Chave (fica no Credential Manager do Windows, não no banco)';
-end;
-
-procedure TAISettingsPage.AIProviderChange(Sender: TObject);
-begin
-  Store.SetSetting('ai_provider', IntToStr(Max(FAIProvider.ItemIndex, 0)));
-  Store.SetSetting('ai_model', '');
-  LoadAIFields;
-end;
-
-procedure TAISettingsPage.AISaveClick(Sender: TObject);
-begin
-  Store.SetSetting('ai_provider', IntToStr(Max(FAIProvider.ItemIndex, 0)));
-  Store.SetSetting('ai_model', Trim(FAIModel.Value));
-  Store.SetSetting('ai_base_url', Trim(FAIBase.Value));
-  if Trim(FAIKey.Value) <> '' then
-    SaveAIKey(TAIProvider(Max(FAIProvider.ItemIndex, 0)), Trim(FAIKey.Value));
-  LoadAIFields;
-  TUIToastManager.Show('IA salva', ttSuccess, 2000);
+  // Cada cartão logo abaixo do último controle (o alTop ordena pelo Top).
+  for LIndex := 0 to High(ACards) - 1 do
+  begin
+    LCard := ACards[LIndex];
+    LTop := 0;
+    for LChild := 0 to Body(CTabInternal).ControlCount - 1 do
+      LTop := Max(LTop, Body(CTabInternal).Controls[LChild].BoundsRect.Bottom);
+    LCard.Parent := Body(CTabInternal);
+    LCard.Top := LTop + 1;
+  end;
+  if ACards <> nil then
+  begin
+    LCard := ACards[High(ACards)];
+    LCard.Parent := Body(CTabCosts);
+    LCard.Top := 0;
+  end;
+  UpdateContentHeight(CTabInternal);
+  UpdateContentHeight(CTabCosts);
 end;
 
 procedure TAISettingsPage.AITestClick(Sender: TObject);
 var
   C: TAIConfig;
 begin
-  AISaveClick(nil);
   C := LoadAIConfig;
   TUIToastManager.Show('Testando a IA...', ttLoading, 3000);
   TTask.Run(
@@ -389,134 +347,184 @@ begin
 end;
 
 procedure TAISettingsPage.BuildVoice;
+const
+  CRowH = 72;
+  CFieldH = 44;
+  CTitleH = 30;
 var
   LBody: TWinControl;
-  LRow: TPanel;
+  LCard: TUICard;
+  LHost: TPanel;
   LEngine: TSttEngine;
+  LTop: Integer;
+
+  { Cartão de uma parte da voz, com ARows linhas. }
+  function Section(const ATitle: string; ARows: Integer): TUICard;
+  var
+    LLabel: TUILabel;
+  begin
+    Result := TUICard.Create(Self);
+    Result.Variant := cvOutlined;
+    Result.CardPad := cpNone;
+    Result.Padding.SetBounds(ScaleValue(16), ScaleValue(12), ScaleValue(16), ScaleValue(4));
+    Result.Height := ScaleValue(CTitleH + ARows * CRowH + 20);
+    Result.AlignWithMargins := True;
+    Result.Margins.SetBounds(0, ScaleValue(12), 0, 0);
+    Result.Parent := LBody;
+    Inc(LTop, 1000);
+    Result.Top := LTop;
+    Result.Align := alTop;
+    LLabel := TUILabel.Create(Self);
+    LLabel.Caption := ATitle;
+    LLabel.Bold := True;
+    LLabel.FontSize := 14;
+    LLabel.AutoSize := False;
+    LLabel.Height := ScaleValue(CTitleH);
+    LLabel.Align := alTop;
+    LLabel.Parent := Result;
+  end;
+
+  { Linha: o que é e o que faz à esquerda; devolve o painel da direita para o controle. }
+  function Row(ACard: TUICard; const ATitle, ADesc: string; AControlW: Integer): TPanel;
+  var
+    LRow, LText: TPanel;
+    LLabel: TUILabel;
+    LPad: Integer;
+  begin
+    LRow := NewPanel(ACard, alTop, CRowH);
+    LRow.Top := 100000;
+    LPad := (ScaleValue(CRowH) - ScaleValue(CFieldH)) div 2;
+    Result := NewPanel(LRow, alRight);
+    Result.Width := ScaleValue(AControlW);
+    Result.Padding.SetBounds(0, LPad, 0, LPad);
+    LText := NewPanel(LRow, alClient);
+    LText.Padding.SetBounds(0, ScaleValue(12), ScaleValue(16), 0);
+    LLabel := TUILabel.Create(Self);
+    LLabel.Caption := ATitle;
+    LLabel.AutoSize := False;
+    LLabel.Height := ScaleValue(20);
+    LLabel.Align := alTop;
+    LLabel.Parent := LText;
+    LLabel := NewHint(LText, ADesc, alClient);
+    LLabel.WordWrap := True;
+  end;
+
+  function Input(AHost: TPanel; const ALabel: string; APassword: Boolean): TUIInput;
+  begin
+    Result := TUIInput.Create(Self);
+    Result.LabelMode := ilmBorder;
+    Result.LabelText := ALabel;
+    Result.ReserveHintSpace := False;
+    if APassword then
+    begin
+      Result.PasswordChar := '*';
+      Result.PasswordToggle := True;
+    end;
+    Result.Align := alClient;
+    Result.Parent := AHost;
+  end;
+
+  procedure SaveButton(AHost: TPanel; AOnClick: TNotifyEvent);
+  var
+    LButton: TUIButton;
+  begin
+    LButton := NewButton(AHost, 'Salvar', AOnClick, bvOutline, alRight);
+    LButton.AlignWithMargins := True;
+    LButton.Margins.SetBounds(ScaleValue(8), 0, 0, 0);
+  end;
+
 begin
   LBody := Body(CTabVoice);
-  NewTitle(LBody, 'Assistente de voz');
-  FVoiceToggle := NewToggleRow(LBody, 'Ouvir a frase de ativação',
-    'O microfone fica ligado e a frase é conferida aqui mesmo (Vosk). A voz do Devbox é tirada do microfone ' +
-    '(cancelamento de eco), então dá para usar sem fone.', nil);
+  LTop := 0;
+
+  LCard := Section('Ligar', 2);
+  LHost := Row(LCard, 'Ouvir a frase de ativação', 'O microfone fica ligado e a frase é conferida aqui no PC. ' +
+    'Nada vai para a internet antes da frase.', 60);
+  FVoiceToggle := TUIToggle.Create(Self);
   FVoiceToggle.Checked := Store.GetSetting('voice_on', '0') = '1';
   FVoiceToggle.OnChange := VoiceToggleChange;
-  LRow := NewPanel(LBody, alTop, 54);
-  LRow.Padding.SetBounds(0, ScaleValue(8), 0, ScaleValue(4));
-  NewButton(LRow, 'Falar agora (sem a frase)', VoiceTalkClick, bvOutline, alRight);
-  NewButton(LRow, 'Salvar frase', VoicePhraseSave, bvOutline, alRight);
-  FVoicePhrase := TUIInput.Create(Self);
-  FVoicePhrase.LabelMode := ilmBorder;
-  FVoicePhrase.LabelText := 'Frase de ativação (ex.: Oi Java)';
-  FVoicePhrase.ReserveHintSpace := False;
+  FVoiceToggle.Align := alClient;
+  FVoiceToggle.Parent := LHost;
+  LHost := Row(LCard, 'Falar sem a frase', 'Começa a ouvir o pedido agora, como se você tivesse dito a frase.', 200);
+  NewButton(LHost, 'Falar agora', VoiceTalkClick, bvOutline, alClient);
+
+  LCard := Section('Frase de ativação', 2);
+  LHost := Row(LCard, 'Frase', 'O que você diz para chamar o Devbox. Ex.: Oi Java.', 380);
+  SaveButton(LHost, VoicePhraseSave);
+  FVoicePhrase := Input(LHost, 'Frase', False);
   FVoicePhrase.Value := Store.GetSetting('voice_phrase', VoiceDefaultPhrase);
-  FVoicePhrase.Width := ScaleValue(240);
-  FVoicePhrase.AlignWithMargins := True;
-  FVoicePhrase.Margins.SetBounds(0, 0, ScaleValue(8), 0);
-  FVoicePhrase.Align := alLeft;
-  FVoicePhrase.Parent := LRow;
+  LHost := Row(LCard, 'Precisão', 'Parecido chama mais fácil, mas às vezes à toa. Bem igual quase não erra, ' +
+    'mas pode não ouvir.', 300);
   FVoiceSense := TUISelect.Create(Self);
-  FVoiceSense.Items.Add('Aceita parecido (mais falso alarme)');
+  FVoiceSense.Items.Add('Aceita parecido');
   FVoiceSense.Items.Add('Equilibrado');
   FVoiceSense.Items.Add('Precisa ser bem igual');
   FVoiceSense.ItemIndex := EnsureRange(StrToIntDef(Store.GetSetting('voice_sense', '1'), 1), 0, 2);
-  FVoiceSense.Width := ScaleValue(260);
-  FVoiceSense.Left := 100000;
-  FVoiceSense.Align := alLeft;
-  FVoiceSense.Parent := LRow;
+  FVoiceSense.Align := alClient;
+  FVoiceSense.Parent := LHost;
   FVoiceSense.OnChange := VoiceSenseChange;
 
-  NewHint(LBody, 'Aparelhos: de onde vem o comando e por onde sai a voz (pedido único e conversa ao vivo).');
-  LRow := NewPanel(LBody, alTop, 54);
-  LRow.Padding.SetBounds(0, ScaleValue(8), 0, ScaleValue(4));
-  NewButton(LRow, 'Testar saída', OutputTestClick, bvOutline, alRight);
+  LCard := Section('Microfone e som', 3);
+  LHost := Row(LCard, 'Microfone', 'De onde vem a sua voz.', 380);
   FInDevice := DeviceSelect(Self, TUIAudioCapture.DeviceNames, Store.GetSetting('voice_in_dev'));
-  FInDevice.Width := ScaleValue(360);
-  FInDevice.AlignWithMargins := True;
-  FInDevice.Margins.SetBounds(0, 0, ScaleValue(8), 0);
-  FInDevice.Align := alLeft;
-  FInDevice.Parent := LRow;
+  FInDevice.Align := alClient;
+  FInDevice.Parent := LHost;
   FInDevice.OnChange := DeviceChange;
+  LHost := Row(LCard, 'Saída de som', 'Por onde a voz do Devbox sai. O eco é tirado do microfone: dá para usar ' +
+    'sem fone.', 380);
   FOutDevice := DeviceSelect(Self, OutputDeviceNames, Store.GetSetting('voice_out_dev'));
-  FOutDevice.Width := ScaleValue(360);
-  FOutDevice.Left := 100000;
-  FOutDevice.Align := alLeft;
-  FOutDevice.Parent := LRow;
+  FOutDevice.Align := alClient;
+  FOutDevice.Parent := LHost;
   FOutDevice.OnChange := DeviceChange;
+  LHost := Row(LCard, 'Testar a saída', 'Fala uma frase curta na saída escolhida.', 200);
+  NewButton(LHost, 'Testar saída', OutputTestClick, bvOutline, alClient);
 
-  NewHint(LBody, 'Quem transforma o pedido falado em texto (no modo pedido único).');
-  LRow := NewPanel(LBody, alTop, 54);
-  LRow.Padding.SetBounds(0, ScaleValue(8), 0, ScaleValue(4));
-  NewButton(LRow, 'Salvar chave', VoiceKeySave, bvOutline, alRight);
+  LCard := Section('Entender o pedido', 2);
+  LHost := Row(LCard, 'Motor de transcrição', 'Transforma sua fala em texto no modo pedido único. Local: nada sai ' +
+    'do PC. Nuvem: entende melhor, precisa de chave.', 380);
   FVoiceStt := TUISelect.Create(Self);
   for LEngine := Low(TSttEngine) to High(TSttEngine) do
     FVoiceStt.Items.Add(SttEngineNames[LEngine]);
   FVoiceStt.ItemIndex := EnsureRange(StrToIntDef(Store.GetSetting('voice_stt', '0'), 0), 0, Ord(High(TSttEngine)));
-  FVoiceStt.Width := ScaleValue(380);
-  FVoiceStt.AlignWithMargins := True;
-  FVoiceStt.Margins.SetBounds(0, 0, ScaleValue(8), 0);
-  FVoiceStt.Align := alLeft;
-  FVoiceStt.Parent := LRow;
+  FVoiceStt.Align := alClient;
+  FVoiceStt.Parent := LHost;
   FVoiceStt.OnChange := VoiceSttChange;
-  FVoiceKey := TUIInput.Create(Self);
-  FVoiceKey.LabelMode := ilmBorder;
-  FVoiceKey.ReserveHintSpace := False;
-  FVoiceKey.PasswordChar := '*';
-  FVoiceKey.PasswordToggle := True;
-  FVoiceKey.AlignWithMargins := True;
-  FVoiceKey.Margins.SetBounds(0, 0, ScaleValue(8), 0);
-  FVoiceKey.Align := alClient;
-  FVoiceKey.Parent := LRow;
+  LHost := Row(LCard, 'Chave do motor', 'Só para motor na nuvem. Fica no Credential Manager do Windows.', 380);
+  SaveButton(LHost, VoiceKeySave);
+  FVoiceKey := Input(LHost, '', True);
   LoadVoiceKeyField;
 
-  NewHint(LBody, 'Depois da frase: um pedido e uma resposta, ou conversa ao vivo com a OpenAI ou o Gemini ' +
-    '(fala e escuta ao mesmo tempo; dá para interromper).');
-  LRow := NewPanel(LBody, alTop, 54);
-  LRow.Padding.SetBounds(0, ScaleValue(8), 0, ScaleValue(4));
-  NewButton(LRow, 'Salvar conversa', LiveSave, bvOutline, alRight);
+  LCard := Section('Como responder', 3);
+  LHost := Row(LCard, 'Modo', 'Pedido único: você fala, ele responde uma vez. Conversa ao vivo: fala e escuta ' +
+    'ao mesmo tempo e dá para interromper.', 380);
   FLiveMode := TUISelect.Create(Self);
-  FLiveMode.Items.Add('Pedido único (transcreve e responde)');
+  FLiveMode.Items.Add('Pedido único');
   FLiveMode.Items.Add('Conversa ao vivo: OpenAI Realtime');
   FLiveMode.Items.Add('Conversa ao vivo: Gemini Live');
   FLiveMode.ItemIndex := EnsureRange(StrToIntDef(Store.GetSetting('voice_live', '0'), 0), 0, 2);
-  FLiveMode.Width := ScaleValue(300);
-  FLiveMode.AlignWithMargins := True;
-  FLiveMode.Margins.SetBounds(0, 0, ScaleValue(8), 0);
-  FLiveMode.Align := alLeft;
-  FLiveMode.Parent := LRow;
+  FLiveMode.Align := alClient;
+  FLiveMode.Parent := LHost;
   FLiveMode.OnChange := LiveModeChange;
-  FLiveModel := TUIInput.Create(Self);
-  FLiveModel.LabelMode := ilmBorder;
-  FLiveModel.ReserveHintSpace := False;
-  FLiveModel.Width := ScaleValue(200);
-  FLiveModel.AlignWithMargins := True;
-  FLiveModel.Margins.SetBounds(0, 0, ScaleValue(8), 0);
-  FLiveModel.Left := 100000;
-  FLiveModel.Align := alLeft;
-  FLiveModel.Parent := LRow;
-  FLiveKey := TUIInput.Create(Self);
-  FLiveKey.LabelMode := ilmBorder;
-  FLiveKey.ReserveHintSpace := False;
-  FLiveKey.PasswordChar := '*';
-  FLiveKey.PasswordToggle := True;
-  FLiveKey.AlignWithMargins := True;
-  FLiveKey.Margins.SetBounds(0, 0, ScaleValue(8), 0);
-  FLiveKey.Align := alClient;
-  FLiveKey.Parent := LRow;
+  LHost := Row(LCard, 'Modelo da conversa', 'Só na conversa ao vivo. Já vem com o padrão de cada empresa.', 380);
+  FLiveModel := Input(LHost, 'Modelo', False);
+  LHost := Row(LCard, 'Chave da conversa', 'OpenAI ou Google AI Studio. Fica no Credential Manager do Windows.', 380);
+  SaveButton(LHost, LiveSave);
+  FLiveKey := Input(LHost, '', True);
   LoadLiveFields;
 
-  NewTitle(LBody, 'O que o ouvido está entendendo');
-  LRow := NewPanel(LBody, alTop, 40);
-  LRow.Padding.SetBounds(0, 0, 0, ScaleValue(4));
-  NewHint(LRow, 'Ao vivo: cada fala, o que o Vosk ouviu e se bateu com a frase. Fica só na memória (últimas ' +
-    '300 linhas), não vai para disco.', alClient);
-  NewButton(LRow, 'Limpar', LogClear, bvGhost, alRight);
+  LCard := Section('O que o ouvido está entendendo', 0);
+  LCard.Height := ScaleValue(CTitleH + 28 + CLogHeight + 28);
+  LHost := NewPanel(LCard, alTop, 28);
+  LHost.Top := 100000;
+  NewHint(LHost, 'Ao vivo: cada fala, o que o Vosk ouviu e se bateu com a frase. Só na memória (300 linhas).',
+    alClient);
+  NewButton(LHost, 'Limpar', LogClear, bvGhost, alRight);
   FLog := TUICode.Create(Self);
   FLog.FontSize := 12;
   FLog.Height := ScaleValue(CLogHeight);
   FLog.Top := 100000;
   FLog.Align := alTop;
-  FLog.Parent := LBody;
+  FLog.Parent := LCard;
 end;
 
 procedure TAISettingsPage.LogClear(Sender: TObject);
@@ -670,7 +678,7 @@ begin
   FLiveModel.LabelText := 'Modelo';
   if LMode = 0 then
   begin
-    FLiveKey.LabelText := 'Usa o motor do pedido e a IA da aba Interna';
+    FLiveKey.LabelText := 'Usa o motor do pedido e a IA da aba Provedor';
     Exit;
   end;
   FLiveModel.Value := Store.GetSetting('voice_live_model_' + IntToStr(LMode),
@@ -715,7 +723,7 @@ var
   LModel: string;
 begin
   LBody := Body(CTabCosts);
-  NewTitle(LBody, 'Quanto as IAs pagas custaram');
+  FCostsTitle := NewTitle(LBody, 'Ações de texto, resumo do dia, voz e transcrição');
   FCostSummary := TUILabel.Create(Self);
   FCostSummary.AutoSize := False;
   FCostSummary.Height := ScaleValue(28);
@@ -723,8 +731,8 @@ begin
   FCostSummary.Top := 100000;
   FCostSummary.Align := alTop;
   FCostSummary.Parent := LBody;
-  NewHint(LBody, 'Estimativa pelo uso que cada API devolve (tokens de texto e de áudio, minutos transcritos) e o ' +
-    'preço abaixo, em dólar. A fatura de cada empresa é a fonte final. Este mês, por modelo:');
+  NewHint(LBody, 'Fora o assistente (cartão acima). Estimativa pelo uso de cada API e o preço abaixo, em US$. ' +
+    'Este mês, por modelo:');
   FCostTable := TUIDataTable.Create(Self);
   FCostTable.Density := tdCompact;
   FCostTable.AddColumn('model', 'Modelo', 'model', 200);

@@ -50,6 +50,7 @@ type
     procedure Tick(Sender: TObject);
   public
     constructor Create(AOwner: TComponent); override;
+    procedure PageRefresh; override;
     destructor Destroy; override;
     procedure Reload;
     { Eventos de hoje de todas as contas (o resumo do dia usa). }
@@ -86,6 +87,7 @@ var
   M: Integer;
 begin
   inherited Create(AOwner);
+  FRefreshable := True;
   Caption := 'Agenda';
   Hint := 'Contas Google e agendas por link iCal, só para consulta. Duplo clique abre o Meet ou o evento.';
   FEvents := TDictionary<string, TCalEvents>.Create;
@@ -93,7 +95,6 @@ begin
 
   Bar := NewPanel(Self, alTop, 50);
   Bar.Padding.SetBounds(0, ScaleValue(6), 0, ScaleValue(6));
-  NewButton(Bar, 'Atualizar', RefreshClick);
   NewButton(Bar, 'Entrar na próxima reunião', JoinClick, bvPrimary);
   FRemindSel := TUISelect.Create(Self);
   for M in CRemindOptions do
@@ -165,7 +166,7 @@ begin
   FTickTimer.Enabled := HasSources;
   FillScheduler;
   if not HasSources then
-    FStatus.Caption := 'Nenhuma agenda. Ligue uma conta ou cole um link iCal em Contas.'
+    FStatus.Caption := 'Nenhuma agenda. Ligue uma conta ou cole um link iCal em Configuração › E-mail e agenda.'
   else
     RefreshClick(nil);
 end;
@@ -414,6 +415,11 @@ begin
     begin
       Result := CompareValue(A.Start, B.Start);
     end));
+end;
+
+procedure TAgendaPage.PageRefresh;
+begin
+  RefreshClick(nil);
 end;
 
 end.

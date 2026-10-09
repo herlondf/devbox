@@ -9,6 +9,7 @@ interface
 uses
   System.Classes,
   System.SysUtils,
+  UI.Tokens,
   Vcl.Controls,
   Vcl.ExtCtrls,
   UI.Labels,
@@ -20,6 +21,7 @@ uses
   UI.ScrollArea,
   UI.Stat,
   UI.Chart,
+  UI.Card,
   Devbox.UI.Kit;
 
 type
@@ -45,8 +47,6 @@ type
     procedure StartFocus(AMinutes: Integer; AByMeeting: Boolean; const AWhy: string);
     procedure StopFocus(const AWhy: string);
     procedure UpdateView;
-    procedure Focus25(Sender: TObject);
-    procedure Focus50(Sender: TObject);
     procedure FocusOpen(Sender: TObject);
     procedure StopClick(Sender: TObject);
     procedure OptionChange(Sender: TObject);
@@ -57,6 +57,9 @@ type
     destructor Destroy; override;
     { Atalho da bandeja: liga até desligar ou desliga. }
     procedure Toggle;
+    { Pomodoro: foco durante o trabalho (AMinutes) e desligado na pausa. }
+    procedure StartTimed(AMinutes: Integer; const AWhy: string);
+    procedure StopBy(const AWhy: string);
     { Mudou o estado (a bandeja e o menu mostram). }
     property OnChanged: TNotifyEvent read FOnChanged write FOnChanged;
   end;
@@ -69,7 +72,6 @@ uses
   System.DateUtils,
   System.Threading,
   UI.Theme,
-  UI.Tokens,
   UI.Toast,
   Devbox.Store,
   Devbox.Focus,
@@ -78,10 +80,18 @@ uses
 
 const
   CMeetingCheckMs = 10000;
+  CRingBox = 240;       // igual ao Pomodoro: anel em caixa quadrada, sempre redondo
+  CRingSize = 208;
+  CRingStroke = 12;
+  CRingInset = 16;
+  CRowH = 34;
+  CTitleH = 30;
+  CStatsH = 150;
 
 constructor TFocusPage.Create(AOwner: TComponent);
 var
-  Top_, Left_, Opts, Bar: TPanel;
+  LTop, LRingHost, LInfo, LBar, LStats: TPanel;
+  LCard: TUICard;
 
   function Option(const ACaption, ASetting: string; ADefault: Boolean): TUICheckbox;
   begin
@@ -90,10 +100,22 @@ var
     Result.Checked := Store.GetSetting(ASetting, IfThen(ADefault, '1', '0')) = '1';
     Result.HelpKeyword := ASetting;
     Result.OnChange := OptionChange;
-    Result.Height := ScaleValue(34);
+    Result.Height := ScaleValue(CRowH);
     Result.Top := 100000;
     Result.Align := alTop;
-    Result.Parent := Opts;
+    Result.Parent := LCard;
+  end;
+
+  function Title(AParent: TWinControl; const ACaption: string): TUILabel;
+  begin
+    Result := TUILabel.Create(Self);
+    Result.Caption := ACaption;
+    Result.Bold := True;
+    Result.AutoSize := False;
+    Result.Height := ScaleValue(CTitleH);
+    Result.Top := 100000;
+    Result.Align := alTop;
+    Result.Parent := AParent;
   end;
 
 begin
@@ -101,73 +123,86 @@ begin
   Caption := 'Foco e reunião';
   Hint := 'Menos interrupção: clipboard em pausa e avisos guardados para depois';
 
-  Top_ := NewPanel(Self, alTop, 300);
-  Left_ := NewPanel(Top_, alLeft);
-  Left_.Width := ScaleValue(260);
+  // Topo: anel (quadrado, sempre redondo) e, ao lado, estado e botões.
+  LTop := NewPanel(Self, alTop, CRingBox);
+  LRingHost := NewPanel(LTop, alLeft);
+  LRingHost.Width := ScaleValue(CRingBox);
   FRing := TUIRadialProgress.Create(Self);
-  FRing.RingSize := 180;
-  FRing.StrokeWidth := 10;
+  FRing.RingSize := CRingSize;
+  FRing.StrokeWidth := CRingStroke;
+  FRing.TabStop := False;  // sem isto o anel de foco do teclado aparece em volta
   FRing.ShowPercent := False;
   FRing.Max := 100;
   FRing.Value := 0;
-  FRing.Align := alClient;
-  FRing.Parent := Left_;
-  // Embaixo do anel: aparecer e sumir não mexe na ordem das opções.
-  FCountdown := TUICountdown.Create(Self);
-  FCountdown.ShowLabels := False;
-  FCountdown.Height := ScaleValue(60);
-  FCountdown.Visible := False;
-  FCountdown.Align := alBottom;
-  FCountdown.Parent := Left_;
-
-  Opts := NewPanel(Top_, alClient);
-  Opts.Padding.SetBounds(ScaleValue(20), 0, 0, 0);
+  FRing.SetBounds(ScaleValue(CRingInset), ScaleValue(CRingInset), ScaleValue(CRingBox - 2 * CRingInset),
+    ScaleValue(CRingBox - 2 * CRingInset));
+  // Ordem de cima para baixo: o NewPanel põe tudo no fim; aqui cada bloco tem a sua vez.
+  LTop.Top := 0;
+  FRing.Parent := LRingHost;
+  LInfo := NewPanel(LTop, alClient);
+  LInfo.Padding.SetBounds(ScaleValue(24), ScaleValue(30), 0, 0);
   FState := TUILabel.Create(Self);
   FState.Bold := True;
   FState.FontSize := 18;
   FState.AutoSize := False;
-  FState.Height := ScaleValue(32);
+  FState.Height := ScaleValue(30);
   FState.Align := alTop;
-  FState.Parent := Opts;
-  Bar := NewPanel(Opts, alTop, 50);
-  Bar.Padding.SetBounds(0, ScaleValue(8), 0, ScaleValue(4));
-  NewButton(Bar, 'Foco 25 min', Focus25, bvPrimary);
-  NewButton(Bar, 'Foco 50 min', Focus50);
-  NewButton(Bar, 'Até eu desligar', FocusOpen);
-  NewButton(Bar, 'Encerrar', StopClick, bvGhost);
-  FPauseClip := Option('Pausar o histórico do clipboard', 'focus_clip', True);
-  FMuteNotify := Option('Guardar os avisos do Devbox para o fim', 'focus_notify', True);
-  FMuteWindows := Option('Silenciar também os avisos do Windows (experimental)', 'focus_windows', False);
-  FAutoMeeting := Option('Ligar sozinho quando a câmera ou o microfone estiverem em uso', 'focus_meeting', True);
+  FState.Parent := LInfo;
+  FCountdown := TUICountdown.Create(Self);
+  FCountdown.ShowLabels := False;
+  FCountdown.Height := ScaleValue(48);
+  FCountdown.Visible := False;
+  FCountdown.Top := 100000;
+  FCountdown.Align := alTop;
+  FCountdown.Parent := LInfo;
+  LBar := NewPanel(LInfo, alTop, 52);
+  LBar.Top := 100000;
+  LBar.Padding.SetBounds(0, ScaleValue(8), 0, ScaleValue(4));
+  NewButton(LBar, 'Ligar o foco', FocusOpen, bvPrimary);
+  NewButton(LBar, 'Encerrar', StopClick, bvGhost).Left := 100000;
+  FMeetingLabel := NewHint(LInfo, '');
+  FMeetingLabel.Top := 100000;
 
-  FMeetingLabel := NewHint(Self, '');
-  Bar := NewPanel(Self, alTop, 150);
-  Bar.Padding.SetBounds(0, ScaleValue(8), 0, ScaleValue(8));
+  // O que o foco faz: um cartão só, em vez de caixas soltas.
+  LCard := TUICard.Create(Self);
+  LCard.Variant := cvOutlined;
+  LCard.CardPad := cpNone;
+  LCard.Padding.SetBounds(ScaleValue(16), ScaleValue(12), ScaleValue(16), ScaleValue(8));
+  LCard.Height := ScaleValue(CTitleH + 4 * CRowH + 28);
+  LCard.AlignWithMargins := True;
+  LCard.Margins.SetBounds(0, ScaleValue(16), 0, 0);
+  LCard.Top := LTop.Top + LTop.Height + 1;
+  LCard.Align := alTop;
+  LCard.Parent := Self;
+  Title(LCard, 'Enquanto o foco está ligado');
+  FPauseClip := Option('Pausar o histórico do clipboard', 'focus_clip', True);
+  FMuteNotify := Option('Guardar os avisos do Devbox e das Issues para o fim', 'focus_notify', True);
+  FMuteWindows := Option('Silenciar também os avisos do Windows (experimental)', 'focus_windows', False);
+  FAutoMeeting := Option('Ligar sozinho em reunião (câmera ou microfone em uso por outro programa)',
+    'focus_meeting', True);
+
+  // Números: hoje e a semana, lado a lado.
+  LStats := NewPanel(Self, alTop, CStatsH);
+  LStats.Top := LCard.Top + LCard.Height + 1;
+  LStats.Padding.SetBounds(0, ScaleValue(16), 0, 0);
   FTodayStat := TUIStat.Create(Self);
   FTodayStat.CardLabel := 'Foco hoje';
-  FTodayStat.Width := ScaleValue(220);
+  FTodayStat.Tone := stPrimary;
+  FTodayStat.Width := ScaleValue(240);
   FTodayStat.Align := alLeft;
-  FTodayStat.Parent := Bar;
+  FTodayStat.Parent := LStats;
   FWeekChart := TUIChart.Create(Self);
   FWeekChart.Backend := cbSkia;
   FWeekChart.ChartType := ctBar;
   FWeekChart.Title := 'Minutos de foco, últimos 7 dias';
   FWeekChart.ShowLegend := False;
   FWeekChart.AlignWithMargins := True;
-  FWeekChart.Margins.SetBounds(ScaleValue(12), 0, 0, 0);
+  FWeekChart.Margins.SetBounds(ScaleValue(16), 0, 0, 0);
   FWeekChart.Align := alClient;
-  FWeekChart.Parent := Bar;
+  FWeekChart.Parent := LStats;
   FillStats;
-  with TUILabel.Create(Self) do
-  begin
-    Caption := 'Histórico';
-    Bold := True;
-    AutoSize := False;
-    Height := ScaleValue(30);
-    Top := 100000;
-    Align := alTop;
-    Parent := Self;
-  end;
+
+  Title(Self, 'Histórico').Margins.SetBounds(0, ScaleValue(12), 0, 0);
   with TUIScrollArea.Create(Self) do
   begin
     Top := 100000;
@@ -286,6 +321,16 @@ begin
   FWeekChart.SetSeries(Labels, [TUIChartSeries.Create('min', Values)]);
 end;
 
+procedure TFocusPage.StartTimed(AMinutes: Integer; const AWhy: string);
+begin
+  StartFocus(AMinutes, False, AWhy);
+end;
+
+procedure TFocusPage.StopBy(const AWhy: string);
+begin
+  StopFocus(AWhy);
+end;
+
 procedure TFocusPage.Toggle;
 begin
   if FocusActive then
@@ -359,16 +404,6 @@ begin
           end;
         end);
     end);
-end;
-
-procedure TFocusPage.Focus25(Sender: TObject);
-begin
-  StartFocus(25, False, '25 minutos');
-end;
-
-procedure TFocusPage.Focus50(Sender: TObject);
-begin
-  StartFocus(50, False, '50 minutos');
 end;
 
 procedure TFocusPage.FocusOpen(Sender: TObject);

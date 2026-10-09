@@ -68,6 +68,7 @@ type
     procedure PathUndo(Sender: TObject);
   public
     constructor Create(AOwner: TComponent); override;
+    procedure PageRefresh; override;
     destructor Destroy; override;
     procedure PageShown; override;
     procedure PageHidden; override;
@@ -134,6 +135,7 @@ var
 
 begin
   inherited Create(AOwner);
+  FRefreshable := True;
   Caption := 'Sistema';
   Hint := 'CPU, memória, discos e processos ao vivo; e o PATH do usuário sem pastas mortas';
   C := UITheme.Tokens.Color;
@@ -524,6 +526,12 @@ begin
   PathFromText(Old);
   FillPath;
   TUIToastManager.Show('PATH antigo carregado. Clique em Salvar para gravar.', ttInfo, 4000);
+end;
+
+procedure TSystemPage.PageRefresh;
+begin
+  Tick(nil);
+  FillDisks;
 end;
 
 end.

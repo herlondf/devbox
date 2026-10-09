@@ -8,7 +8,7 @@ uses
   System.SysUtils;
 
 const
-  AppVersion = '0.3.0';
+  AppVersion = '0.4.0';
   // Segunda instância avisa a primeira por esta mensagem registrada.
   ShowMessageName = 'Devbox.Show';
   // Histórico que não é snippet some do mais velho para o mais novo depois disto.

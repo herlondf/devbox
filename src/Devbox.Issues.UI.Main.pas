@@ -1,4 +1,4 @@
-unit Devbox.Issues.UI.Main;
+﻿unit Devbox.Issues.UI.Main;
 
 interface
 
@@ -53,7 +53,8 @@ uses
   Devbox.Issues.UI.Views,
   Devbox.Issues.UI.Detail,
   Devbox.Issues.UI.Mini,
-  Devbox.Issues.Update;
+  Devbox.Issues.Update,
+  Devbox.UI.SidePeek;
 
 type
   TItemFilter = (ifNow, ifMine, ifOverdue, ifReview, ifManual, ifFlagged, ifMyPrs, ifSprint);
@@ -81,7 +82,6 @@ type
     FFooter: TPanel;               // atalhos; igual em todas as abas (FAB não pula)
     FHoursLabel: TUILabel;         // Jira: horas lançadas hoje e na semana
     FHoursToday, FHoursWeek: Double;
-    FFooterActions: TArray<TProc>;
     FTabBadges: string;            // contadores com que as abas foram montadas
     FFetchingRate: Boolean;        // cotação do dólar em andamento
     FAccountBtn: TUIButton;
@@ -125,6 +125,12 @@ type
     FProgress: TUIProgressBar;
     FPalette: TUICommandPalette;
     FAssistant: TUIAssistant;
+    FAiCards: TArray<TControl>;
+    FAssistantHost: TWinControl;    // posto pela janela principal (canto do rodapé): PlaceAssistant não mexe
+    FOnScreenContext: TFunc<string>;
+    FOnPaletteCommands: TProc<TUICommandPalette>;
+    FDetached: Boolean;              // painel, contas e preferências foram para outras telas
+    FOnNavigate: TProc<Integer>;     // 0 painel, 2 contas, 3 preferências: a principal mostra onde estão
     FPages: array[TPage] of TPanel;
     FContent: TPanel;
     FPage: TPage;
@@ -142,6 +148,7 @@ type
     FSkeleton: TPanel;
     FItemMenu: TUIContextMenu;
     FDetail: TDetailPanel;
+    FDetailPeek: TSidePeek;          // o detalhe abre ao lado da janela, como o e-mail
     // Outras visões
     FDashboard: TDashboardView;
     FDrill: TDrill;                 // filtro vindo de um card do Dashboard
@@ -196,6 +203,7 @@ type
     procedure BuildAccountsPage;
     procedure BuildSettingsPage;
     procedure BuildAssistant;
+    procedure AssistantStateChange(Sender: TObject; AState: TUIAssistantState);
     function NewPanel(AParent: TWinControl; AAlign: TAlign; AHeight: Integer = 0): TPanel;
     function NewList(AParent: TWinControl; ARowHeight: Integer): TUIVirtualList;
     procedure ApplyThemeColors;
@@ -221,6 +229,8 @@ type
     procedure UpdateMascotMood;
     procedure DetailChanged(Sender: TObject);
     procedure SetDetailVisible(AShow: Boolean);
+    function DetailOpen: Boolean;
+    procedure EnsureDetailPeek;
     procedure FlashChanges(const AKeys: TArray<string>);
     procedure AccountCardClick(Sender: TObject);
     procedure ItemsMouseMove(Sender: TObject; Shift: TShiftState; X, Y: Integer);
@@ -300,7 +310,6 @@ type
     procedure UndoUnwatch(Sender: TObject);
     procedure WatchKey(const AText: string);
     procedure BuildFooter;
-    procedure FooterClick(Sender: TObject);
     procedure FormKeyDownEsc;
     procedure NewAccountClick(Sender: TObject);
     procedure RefreshClick(Sender: TObject);
@@ -326,6 +335,32 @@ type
     procedure DestroyWnd; override;
   public
     function PageKey(var AKey: Word; AShift: TShiftState): Boolean; override;
+    procedure PageRefresh; override;
+    procedure PageHidden; override;
+    function PageShortcuts: TArray<TDevShortcut>; override;
+    { Cartões da config de IA (provedor, IA automática, uso): a janela principal
+      leva para Configuração › IA. Os eventos continuam aqui. }
+    function TakeAiSettings: TArray<TControl>;
+    { Comandos da janela principal (telas, foco, pomodoro...): entram na paleta a cada reconstrução. }
+    property OnPaletteCommands: TProc<TUICommandPalette> read FOnPaletteCommands write FOnPaletteCommands;
+    procedure RefreshPalette;
+    procedure OpenPalette;
+    { Números do cartão de uso da IA (ele mora em Configuração › IA › Custos). }
+    procedure RefreshAiUsage;
+    { Assistente da janela inteira: a principal registra ferramentas nele. }
+    property Assistant: TUIAssistant read FAssistant;
+    { Entrega o painel (Dashboard), as contas e as preferências para outras telas. A tela Issues
+      fica só com a lista; pedir uma das outras chama OnNavigate (0 painel, 2 contas, 3 preferências). }
+    procedure DetachPages(out ADashboard, AAccounts, ASettings: TControl);
+    { Abre a issue na lista (clique no Hoje). }
+    procedure OpenIssue(const AItem: TItem);
+    property OnNavigate: TProc<Integer> read FOnNavigate write FOnNavigate;
+    { Tela da frente no Devbox (nome e o que está aberto): entra no prompt do assistente. }
+    property OnScreenContext: TFunc<string> read FOnScreenContext write FOnScreenContext;
+    { Issues abertas das contas ligadas, do último retrato (para a voz). Thread de UI. }
+    function OpenItems: TItems;
+    { O FAB do assistente fica na tela da frente (AHost); nas Issues, a própria tela posiciona. }
+    procedure AttachAssistant(AHost: TWinControl; ARight, ABottom: Integer);
     { "Procurar agora" de Configuração › Geral: procura (ou instala a que já achou). }
     procedure CheckUpdatesNow;
     { Ícone da bandeja do Devbox (balão quando o toast do Windows falha). }
@@ -499,6 +534,7 @@ end;
 constructor TIssuesPage.Create(AOwner: TComponent);
 begin
   inherited Create(AOwner);
+  FRefreshable := True;
   // O código do Vigia monta a tela precisando de janela (assistente, atalho): já nasce dentro
   // da janela principal; o AddPage do Devbox move para a área das telas depois.
   if AOwner is TWinControl then
@@ -817,7 +853,7 @@ begin
 
   FPalette := TUICommandPalette.Create(Self);
   FPalette.Shortcut := Tr('Ctrl+K');
-  FPalette.Placeholder := Tr('Buscar issue ou comando...');
+  FPalette.Placeholder := Tr('Buscar tela, comando ou issue...');
   FPalette.OnItemSelect := PaletteSelect;
   FPalette.AddProvider(TWatchProvider.Create);
 end;
@@ -835,12 +871,11 @@ begin
   Page := FPages[pgIssues];
 
   FDetail := TDetailPanel.Create(Self);
+  // Mora no painel lateral (SetDetailVisible cria na primeira vez).
   FDetail.Width := ScaleValue(DetailWidth);
-  FDetail.Visible := False;
   FDetail.OnClose := DetailClose;
   FDetail.OnChanged := DetailChanged;
-  FDetail.Align := alRight;
-  FDetail.Parent := Page;
+  FDetail.Align := alClient;
 
   FAlert := TUIAlert.Create(Self);
   FAlert.Tone := atError;
@@ -1230,6 +1265,7 @@ begin
   Btn.Parent := Host;
 
   Card := NewSection(Tr('Assistente de IA'), 5);
+  FAiCards := FAiCards + [Card];
   Host := NewRow(Card, Tr('Provedor'), Tr('Anthropic usa o assistente completo da suíte; os outros, a API ' +
     'compatível com OpenAI.'), 260);
   FAiProvider := TUISelect.Create(Self);
@@ -1327,6 +1363,7 @@ begin
   Btn.Parent := Host;
 
   Card := NewSection(Tr('IA automática'), 7);
+  FAiCards := FAiCards + [Card];
   Host := NewRow(Card, Tr('Limite por mês (US$)'), Tr('Chegou no limite, o chat e as tarefas automáticas param ' +
     'até o mês virar. 0 = sem limite.'), 160);
   FAiCap := TUINumberInput.Create(Self);
@@ -1363,7 +1400,8 @@ begin
   end;
 
   // Uso: números do mês e custo por dia.
-  Card := NewSection(Tr('Uso da IA (custo estimado)'), 0);
+  Card := NewSection(Tr('Assistente e IA automática das Issues: este mês'), 0);
+  FAiCards := FAiCards + [Card];
   Card.Height := ScaleValue(44 + 120 + 70 + 16);
   Row := NewPanel(Card, alNone, 120);
   Row.Top := 1000;
@@ -1608,6 +1646,7 @@ begin
   FAssistant.Greeting := Tr('Posso resumir suas issues, registrar horas, comentar, mudar status e filtrar ' +
     'a tela. Toda escrita pede sua confirmação. Ex.: "o que vence esta semana?" ou "lance 2h na PROJ-1".');
   RegisterAiTools;
+  FAssistant.OnStateChange := AssistantStateChange;
   FAssistant.BringToFront;
 end;
 
@@ -1618,6 +1657,18 @@ var
   P, Old: TPage;
   Dir: TUIPageTransitionDirection;
 begin
+  if FDetached and (APage <> pgIssues) then
+  begin
+    if APage = pgSettings then
+    begin
+      FApiKey.Value := '';
+      UpdateAiUsage;
+      SettingsResize(nil);
+    end;
+    if Assigned(FOnNavigate) then
+      FOnNavigate(Ord(APage));
+    Exit;
+  end;
   Old := FPage;
   FPage := APage;
   // Prepara a página antes da transição: consulta ao banco e layout no meio do
@@ -1751,6 +1802,8 @@ procedure TIssuesPage.PlaceAssistant;
 var
   Host: TWinControl;
 begin
+  if FAssistantHost <> nil then
+    Exit;
   // Sempre a página: na lista de Issues a margem dela subia o FAB.
   Host := FPages[FPage];
   if FAssistant.Parent <> Host then
@@ -1759,12 +1812,79 @@ begin
     ClipAssistant;
   end;
   // Painel da issue aberto: o FAB vai para a esquerda dele e não cobre o enviar.
-  if (Host = FDetail.Parent) and FDetail.Visible and (FDetail.Width > 0) then
+  if False then  // o detalhe agora abre fora da janela
     FAssistant.SetBounds(FDetail.Left - FAssistant.Width - ScaleValue(16),
       Host.ClientHeight - FAssistant.Height - ScaleValue(16), FAssistant.Width, FAssistant.Height)
   else
     FAssistant.SetBounds(Host.ClientWidth - FAssistant.Width - ScaleValue(16),
       Host.ClientHeight - FAssistant.Height - ScaleValue(16), FAssistant.Width, FAssistant.Height);
+  FAssistant.BringToFront;
+end;
+
+function TIssuesPage.OpenItems: TItems;
+var
+  LAccount: TAccount;
+  LItem: TItem;
+begin
+  Result := nil;
+  for LAccount in IssueStore.ListAccounts do
+    if LAccount.Enabled then
+      for LItem in IssueStore.LoadSnapshot(LAccount.Id) do
+        if not SameText(LItem.StatusCategory, 'done') then
+          Result := Result + [LItem];
+end;
+
+procedure TIssuesPage.RefreshPalette;
+begin
+  RebuildPalette;
+end;
+
+procedure TIssuesPage.RefreshAiUsage;
+begin
+  UpdateAiUsage;
+end;
+
+procedure TIssuesPage.OpenPalette;
+begin
+  FPalette.Open;
+end;
+
+procedure TIssuesPage.OpenIssue(const AItem: TItem);
+begin
+  if Assigned(FOnShowRequest) then
+    FOnShowRequest(Self);
+  OpenDetail(AItem);
+end;
+
+procedure TIssuesPage.DetachPages(out ADashboard, AAccounts, ASettings: TControl);
+var
+  P: TPage;
+begin
+  ShowPage(pgIssues);
+  FDetached := True;
+  FTabs.Visible := False;
+  ADashboard := FPages[pgDashboard];
+  AAccounts := FPages[pgAccounts];
+  ASettings := FPages[pgSettings];
+  for P in [pgDashboard, pgAccounts, pgSettings] do
+    FPages[P].Visible := True;
+end;
+
+function TIssuesPage.TakeAiSettings: TArray<TControl>;
+begin
+  Result := FAiCards;
+end;
+
+procedure TIssuesPage.AttachAssistant(AHost: TWinControl; ARight, ABottom: Integer);
+begin
+  FAssistantHost := AHost;
+  if FAssistant.Parent <> AHost then
+  begin
+    FAssistant.Parent := AHost;
+    ClipAssistant;
+  end;
+  FAssistant.SetBounds(AHost.ClientWidth - FAssistant.Width - ARight, AHost.ClientHeight - FAssistant.Height - ABottom,
+    FAssistant.Width, FAssistant.Height);
   FAssistant.BringToFront;
 end;
 
@@ -1780,14 +1900,16 @@ var
   It: TItem;
 begin
   FPalette.ClearItems;
-  FPalette.AddCommand(Tr('Ações / Atualizar agora'), procedure begin Poll(True); end, HeroIcon('arrow-path'));
+  if Assigned(FOnPaletteCommands) then
+    FOnPaletteCommands(FPalette);
+  FPalette.AddCommand(Tr('Issues / Atualizar agora'), procedure begin Poll(True); end, HeroIcon('arrow-path'));
   FPalette.AddCommand(Tr('Ações / Alternar tema claro e escuro'),
     procedure
     begin
       FThemeSwap.Checked := not FThemeSwap.Checked;
       ThemeSwapToggle(nil);
     end, HeroIcon('sun'));
-  FPalette.AddCommand(Tr('Ações / Nova conta'), procedure begin NewAccountClick(nil); end, HeroIcon('squares-plus'));
+  FPalette.AddCommand(Tr('Issues / Nova conta'), procedure begin NewAccountClick(nil); end, HeroIcon('squares-plus'));
   FPalette.AddCommand(Tr('Ações / Assistente IA'), procedure begin FAssistant.Open; end, HeroIcon('fire'));
   for P := Low(TPage) to High(TPage) do
     FPalette.AddItem('page:' + IntToStr(Ord(P)), Tr('Ir para ') + Tr(PageTitles[P]), '', Tr('Navegar'));
@@ -1806,6 +1928,9 @@ var
   Parts: TArray<string>;
   I: Integer;
 begin
+  // Escolhido de outra tela: as Issues vêm para a frente antes.
+  if (AID.StartsWith('page:') or AID.StartsWith('issue:')) and Assigned(FOnShowRequest) then
+    FOnShowRequest(Self);
   if AID.StartsWith('watch:') then
     WatchKey(AID.Substring(6))
   else if AID.StartsWith('page:') then
@@ -1976,7 +2101,7 @@ begin
   FAccountFilter := StrToIntDef(AID, 0);
   IssueStore.SetSetting('account_filter', IntToStr(FAccountFilter));
   RebuildAccountMenu;
-  FDetail.Visible := False;
+  SetDetailVisible(False);
   ReloadTags;
   RebuildRepoMenu;
   ApplyFilters;
@@ -2061,7 +2186,7 @@ begin
   FRepoFilter := ARepo;
   IssueStore.SetSetting('repo_filter', FRepoFilter);
   RebuildRepoMenu;
-  FDetail.Visible := False;
+  SetDetailVisible(False);
   ApplyFilters;
   UpdateViews;
   RebuildPalette;
@@ -2233,8 +2358,25 @@ end;
   último comentário) e avisos recentes. O assistente responde sobre qualquer
   tela sem precisar navegar. Tokens nunca entram aqui. }
 procedure TIssuesPage.UpdateAssistantContext;
+var
+  LScreen: string;
 begin
-  FAssistant.Config.SystemPrompt := BuildAiContext;
+  LScreen := '';
+  if Assigned(FOnScreenContext) then
+    LScreen := FOnScreenContext();
+  FAssistant.Config.SystemPrompt := BuildAiContext + sLineBreak +
+    Tr('Você também é o assistente do Devbox inteiro, não só das issues. O usuário pode pedir sobre o que está na ' +
+    'tela ("isso", "esse texto", "esse log", "esse e-mail"): o conteúdo vem abaixo em "Tela aberta" (e a ferramenta ' +
+    'devbox_tela_atual lê de novo). Traduzir, resumir, explicar, melhorar texto, mensagem de commit: responda e, ' +
+    'quando o resultado for um texto para usar, ofereça devbox_copiar. Comando de terminal: devbox_rodar_comando ' +
+    '(o usuário confirma antes).') + sLineBreak + sLineBreak + LScreen;
+end;
+
+{ Antes de cada pergunta (o usuário começou a digitar): o prompt leva a tela de agora. }
+procedure TIssuesPage.AssistantStateChange(Sender: TObject; AState: TUIAssistantState);
+begin
+  if AState = asListening then
+    UpdateAssistantContext;
 end;
 
 function TIssuesPage.BuildAiContext: string;
@@ -2639,7 +2781,7 @@ begin
         else
           Notify(Tr('Triagem · ') + It.Key, Format('%s%s · %s', [IfThen(Tag <> '', '#' + Tag + ' · ', ''), Prio,
             Why]), '', stInfo, It.Key, It.AccountId);
-        if FDetail.Visible and SameText(FDetail.Item.Key, It.Key) and AccountById(It.AccountId, A) then
+        if DetailOpen and SameText(FDetail.Item.Key, It.Key) and AccountById(It.AccountId, A) then
           FDetail.ShowItem(FDetail.Item, A);
       end,
       procedure(AErr: string)
@@ -2988,7 +3130,7 @@ begin
     if FAccounts = nil then
     begin
       FItemsEmpty.Title := Tr('Nenhuma conta ainda');
-      FItemsEmpty.Description := Tr('Cadastre uma conta do GitHub ou do Jira em Contas.');
+      FItemsEmpty.Description := Tr('Cadastre uma conta do GitHub ou do Jira em Configuração › Issues.');
       FItemsEmpty.ActionLabel := Tr('Nova conta');
       FItemsEmpty.OnAction := NewAccountClick;
     end
@@ -3393,6 +3535,8 @@ begin
       FItemsList.SelectIndex(I);
       FItemsList.ScrollToIndex(I);
     end;
+  // O detalhe precisa de pai (o painel lateral) antes de montar o conteúdo.
+  EnsureDetailPeek;
   FDetail.ShowItem(AItem, A);
   SetDetailVisible(True);
   if AItem.ThreadId <> '' then
@@ -3408,41 +3552,38 @@ begin
       end);
 end;
 
-{ O painel cresce da direita (0 até DetailWidth) e encolhe ao fechar; a lista
-  acompanha porque está alinhada ao lado. }
-procedure TIssuesPage.SetDetailVisible(AShow: Boolean);
-var
-  Target: Integer;
+{ Detalhe da issue no painel lateral fora da janela (o mesmo do e-mail). }
+procedure TIssuesPage.EnsureDetailPeek;
 begin
-  if AShow = (FDetail.Visible and (FDetail.Width > 0)) then
+  if FDetailPeek <> nil then
     Exit;
-  Target := ScaleValue(DetailWidth);
-  FreeAndNil(FDetailAnim);
+  FDetailPeek := TSidePeek.CreatePeek(GetParentForm(Self), DetailWidth + 140);
+  FDetailPeek.Title := Tr('Issue');
+  FDetail.Parent := FDetailPeek.Body;
+end;
+
+procedure TIssuesPage.SetDetailVisible(AShow: Boolean);
+begin
   if AShow then
   begin
-    FDetail.Width := 0;
-    FDetail.Visible := True;
-    FDetailAnim := TUIAnimation.Create(0, Target, 220, aeEaseOutCubic);
+    EnsureDetailPeek;
+    if FDetail.Item.Key <> '' then
+      FDetailPeek.Title := FDetail.Item.Key;
+    FDetailPeek.Open;
   end
-  else
-    FDetailAnim := TUIAnimation.Create(FDetail.Width, 0, 180, aeEaseInCubic);
-  FDetailAnim.OnUpdate :=
-    procedure(const AValue: Single)
-    begin
-      FDetail.Width := Round(AValue);
-      PlaceAssistant;
-    end;
-  FDetailAnim.OnComplete :=
-    procedure
-    begin
-      if FDetail.Width = 0 then
-      begin
-        FDetail.Visible := False;
-        FDetail.Width := ScaleValue(DetailWidth);
-      end;
-      PlaceAssistant;
-    end;
-  FDetailAnim.Start;
+  else if FDetailPeek <> nil then
+    FDetailPeek.Close_;
+end;
+
+function TIssuesPage.DetailOpen: Boolean;
+begin
+  Result := (FDetailPeek <> nil) and FDetailPeek.IsOpen;
+end;
+
+procedure TIssuesPage.PageHidden;
+begin
+  SetDetailVisible(False);
+  inherited;
 end;
 
 procedure TIssuesPage.ItemsClick(Sender: TObject; AIndex: Integer; const AItem: TUIVListItem);
@@ -3458,7 +3599,7 @@ begin
     Exit;
   end;
   // Painel aberto acompanha a seleção; fechado, o clique só seleciona.
-  if FDetail.Visible and (AIndex >= 0) and (AIndex <= High(FShown)) then
+  if DetailOpen and (AIndex >= 0) and (AIndex <= High(FShown)) then
     OpenDetail(FShown[AIndex]);
 end;
 
@@ -3733,6 +3874,8 @@ begin
   for C in FTagChips do
     C.Active := False;
   FDrill := Default(TDrill);
+  if FDetached and not Showing and Assigned(FOnShowRequest) then
+    FOnShowRequest(Self);
   case ADrill.Kind of
     dkMine: FChips[ifMine].Active := True;
     dkFlagged: FChips[ifFlagged].Active := True;
@@ -3790,6 +3933,9 @@ end;
 
 procedure TIssuesPage.ViewOpenItem(Sender: TObject; const AItem: TItem);
 begin
+  // Clique no painel (que mora em Hoje): a lista vem para a frente.
+  if FDetached and not Showing and Assigned(FOnShowRequest) then
+    FOnShowRequest(Self);
   OpenDetail(AItem);
 end;
 
@@ -3903,61 +4049,12 @@ end;
 
 { ── Cabeçalho, tray e atalhos ───────────────────────────────────────────── }
 
-{ Rodapé: atalhos de teclado (clicáveis). Mesma altura em todas as abas, então
-  o FAB fica sempre no mesmo lugar. }
+{ Rodapé: barra de progresso e horas do Jira. Os atalhos ficam no rodapé da janela
+  principal (PageShortcuts). Mesma altura em todas as abas: o FAB fica no mesmo lugar. }
 procedure TIssuesPage.BuildFooter;
-type
-  TShortcut = record
-    Keys, Caption: string;
-    Action: TProc;
-  end;
-var
-  Items: TArray<TShortcut>;
-  It: TShortcut;
-  K: TUIKbd;
-  L: TUILabel;
-  N: Integer;
-
-  function Sc(const AKeys, ACaption: string; const AAction: TProc): TShortcut;
-  begin
-    Result.Keys := AKeys;
-    Result.Caption := ACaption;
-    Result.Action := AAction;
-  end;
-
 begin
   FFooter := NewPanel(FContent, alBottom, 40);
   FFooter.Padding.SetBounds(Sp(UITheme.Tokens.Spacing.S4), 0, Sp(UITheme.Tokens.Spacing.S4), 0);
-  Items := [
-    Sc(Tr('Ctrl+K'), Tr('Buscar, comandos e acompanhar'), procedure begin FPalette.Open; end),
-    Sc('F5', Tr('Atualizar'), procedure begin Poll(True); end),
-    Sc(Tr('Ctrl+1-4'), Tr('Abas'), procedure begin ShowPage(TPage((Ord(FPage) + 1) mod (Ord(High(TPage)) + 1))); end),
-    Sc(Tr('Esc'), Tr('Fechar'), procedure begin FormKeyDownEsc; end)];
-  N := 0;
-  for It in Items do
-  begin
-    K := TUIKbd.Create(Self);
-    K.Shortcut := It.Keys;
-    K.AlignWithMargins := True;
-    K.Margins.SetBounds(IfThen(N = 0, 0, Sp(UITheme.Tokens.Spacing.S4)), 9, 6, 9);
-    K.Left := (N * 2 + 1) * 1000;
-    K.Align := alLeft;
-    K.Parent := FFooter;
-    L := TUILabel.Create(Self);
-    L.Caption := It.Caption;
-    L.Variant := lvMuted;
-    L.AutoSize := True;
-    L.Cursor := crHandPoint;
-    L.Hint := It.Keys;
-    L.Tag := N;
-    L.Left := (N * 2 + 2) * 1000;
-    L.Align := alLeft;
-    L.Parent := FFooter;
-    // Clicar no texto faz o mesmo que a tecla.
-    TClickAccess(L).OnClick := FooterClick;
-    FFooterActions := FFooterActions + [It.Action];
-    Inc(N);
-  end;
   FHoursLabel := TUILabel.Create(Self);
   FHoursLabel.Variant := lvMuted;
   FHoursLabel.AutoSize := True;
@@ -3967,9 +4064,14 @@ begin
   FHoursLabel.Parent := FFooter;
 end;
 
-procedure TIssuesPage.FooterClick(Sender: TObject);
+procedure TIssuesPage.PageRefresh;
 begin
-  FFooterActions[TComponent(Sender).Tag]();
+  Poll(True);
+end;
+
+function TIssuesPage.PageShortcuts: TArray<TDevShortcut>;
+begin
+  Result := nil;
 end;
 
 { Primeira abertura depois da unificação: a inicialização com o Windows do Vigia
@@ -4056,6 +4158,8 @@ begin
   if Format('%d|%d', [FUnread, FAccountErrors.Count]) = FTabBadges then
     Exit;
   FTabBadges := Format('%d|%d', [FUnread, FAccountErrors.Count]);
+  if FDetached then
+    Exit;
   Keep := Ord(FPage);  // a busca recria as abas; a aba aberta continua
   FTabs.OnChange := nil;
   FTabs.RemoveTab(3);  // índice inexistente é ignorado
@@ -4502,7 +4606,7 @@ begin
     VK_F5:
       Poll(True);
     VK_ESCAPE:
-      if FDetail.Visible then
+      if DetailOpen then
         SetDetailVisible(False)
       else
         Exit;   // Esc sem detalhe: a janela principal esconde

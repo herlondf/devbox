@@ -2,6 +2,37 @@
 
 Formato [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
+## [0.4.0] - 2026-10-09
+
+### Adicionado
+- Hoje: primeira tela do menu, numa grade. Números do dia (compromissos, e-mails não lidos, issues pedindo atenção, foco), listas de agenda, e-mails e issues que pedem atenção (atrasada, vence hoje, impedida, CI falhou, review, menção), atividade recente nas issues, issues por status e minutos de foco na semana. Cada linha abre a tela certa.
+- Pomodoro (grupo Produtividade): trabalho e pausa em ciclos, pausa longa a cada N, liga o modo foco no trabalho, conta os pomodoros do dia. Também na bandeja (menu e tempo na dica do ícone).
+- Paleta de comandos do Devbox inteiro (Ctrl+K em qualquer tela): telas, foco, pomodoro, captura, voz, novo snippet, "Resumo do meu dia" e as issues.
+- Rodapé de atalhos em todas as telas, com os atalhos de cada uma. F5 atualiza a tela da frente.
+- Painel lateral fora da janela: e-mail aberto, logs de container e detalhe da issue abrem ao lado da janela.
+- Assistente (botão redondo) em todas as telas, no canto do rodapé. Vê o que está aberto (item do Clipboard, e-mail, log), copia o resultado, roda comando com confirmação e faz o resumo do dia (agenda e e-mails não lidos) quando pedido.
+- Chat do assistente com formatação: título, listas, negrito, itálico, código e link (markdown).
+- Gemini como provedor de IA.
+- Voz: agenda de qualquer dia (amanhã, AAAA-MM-DD) e issues abertas (todas, vencendo, atrasadas, impedidas, mencionado, detalhe por chave).
+- Configuração › Issues: contas e preferências das Issues. A tela Issues fica só com a lista.
+
+### Mudado
+- Menu: Início (Hoje, Issues), E-mail e agenda, Produtividade (Foco e reunião, Pomodoro), Ferramentas, Ambiente, Automação, Configuração.
+- Clipboard e Expansor de texto viraram abas de Ferramentas. Win+Alt+B continua abrindo o Clipboard.
+- Uma IA só: a config do assistente vale também para ações de texto e voz (Configuração › IA › Provedor). A config antiga só vale se a nova não estiver pronta.
+- Botões de IA das telas (IA… do Clipboard, Explicar com IA dos logs, tela Comando por IA) deram lugar ao assistente.
+- Resumo do dia automático saiu; o assistente resume quando pedido.
+- Configuração › IA: aba Voz em cartões explicados; Custos com os dois painéis de custo, cada um dizendo a que se refere.
+- Limpeza: onde procurar e Analisar numa linha; ações embaixo da tabela.
+- Foco e Pomodoro com o mesmo anel, cartões e alturas.
+- Serviços: cartões de números com a mesma largura e cor.
+- Botões "Atualizar" trocados pelo F5.
+- E-mail: clicar só abre o e-mail. Aplicar sugestões vale para todas; Delete descarta a do e-mail aberto.
+
+### Corrigido
+- O microfone do próprio Devbox (voz) não liga mais o modo reunião.
+- Painel lateral sem partes transparentes e sem a sombra translúcida.
+
 ## [0.3.0] - 2026-10-08
 
 ### Adicionado

@@ -195,7 +195,7 @@ begin
   FAiBtn := NewIconButton(Head, CSvgSpark, Tr('Resumir a conversa e sugerir resposta (IA)'), AiSummaryClick);
   FTimeBtn := NewIconButton(Head, CSvgClock, Tr('Registrar tempo'), TimeClick);
   NewIconButton(Head, CSvgOpen, Tr('Abrir no navegador'), OpenClick);
-  NewIconButton(Head, CSvgClose, Tr('Fechar (Esc)'), CloseClick);
+  // Sem X próprio: o painel lateral que hospeda o detalhe já tem o dele.
   Crumbs := TPanel.Create(Self);
   Crumbs.BevelOuter := bvNone;
   Crumbs.ParentBackground := False;

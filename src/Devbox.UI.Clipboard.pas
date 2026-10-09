@@ -47,8 +47,6 @@ type
     FActionsBar: TPanel;               // Colar, Copiar...: sempre a última embaixo
     FConvertBtn: TUIButton;
     FConvertMenu: TUIDropdown;
-    FAIBtn: TUIButton;
-    FAIMenu: TUIDropdown;
     FPasteTimer: TTimer;
     FPrevWnd: HWND;
     procedure ClipCopied(AKind: TClipKind; const AText: string; const AData: TBytes);
@@ -77,8 +75,6 @@ type
     procedure HashFilesClick(Sender: TObject);
     procedure ZipClick(Sender: TObject);
     procedure EditSnippetClick(Sender: TObject);
-    procedure AIClick(Sender: TObject);
-    procedure AIItemClick(Sender: TObject; const AID: string);
   public
     constructor Create(AOwner: TComponent); override;
     destructor Destroy; override;
@@ -86,6 +82,8 @@ type
     { Abre pela tecla global: guarda a janela de antes e limpa a busca. }
     procedure OpenFromHotkey(APrevWnd: HWND);
     function PageKey(var AKey: Word; AShift: TShiftState): Boolean; override;
+    function PageShortcuts: TArray<TDevShortcut>; override;
+    function PageContext: string; override;
     property Watcher: TClipboardWatcher read FWatcher;
     { Botão "Snippet e atalho…": quem abre o diálogo é a tela do Expansor. }
     property OnEditSnippet: TClipEditEvent read FOnEditSnippet write FOnEditSnippet;
@@ -148,7 +146,6 @@ constructor TClipboardPage.Create(AOwner: TComponent);
 var
   Bar, Right, Buttons: TPanel;
   K: TConvertKind;
-  A: TAIAction;
 begin
   inherited Create(AOwner);
   Caption := 'Clipboard';
@@ -186,13 +183,6 @@ begin
   FTextBar.Padding.SetBounds(0, ScaleValue(8), 0, 0);
   FConvertBtn := NewButton(FTextBar, 'Converter…', ConvertClick, bvGhost);
   NewButton(FTextBar, 'Snippet e atalho…', EditSnippetClick, bvGhost);
-  FAIBtn := NewButton(FTextBar, 'IA…', AIClick, bvGhost);
-  FAIMenu := TUIDropdown.Create(Self);
-  FAIMenu.AnchorControl := FAIBtn;
-  FAIMenu.AnchorPos := dapTopLeft;
-  FAIMenu.OnItemClick := AIItemClick;
-  for A := Low(AIActionNames) to High(AIActionNames) do
-    FAIMenu.AddItem(IntToStr(Ord(A)), AIActionNames[A]);
   FConvertMenu := TUIDropdown.Create(Self);
   FConvertMenu.AnchorControl := FConvertBtn;
   FConvertMenu.AnchorPos := dapTopLeft;
@@ -286,6 +276,25 @@ begin
   else
     Result := False;
   end;
+end;
+
+function TClipboardPage.PageContext: string;
+const
+  CMaxChars = 8000;
+var
+  LClip: TClip;
+begin
+  Result := '';
+  if SelectedClip(LClip) and (LClip.Kind = ckText) then
+    Result := 'Item escolhido no histórico do Clipboard (texto que o usuário copiou):' + sLineBreak +
+      Copy(LClip.Text, 1, CMaxChars);
+end;
+
+function TClipboardPage.PageShortcuts: TArray<TDevShortcut>;
+begin
+  Result := [
+    DevShortcut('Enter', 'Colar na janela de antes', procedure begin PasteClick(nil); end),
+    DevShortcut('↑ ↓', 'Escolher', procedure begin MoveSelection(1); end)];
 end;
 
 procedure TClipboardPage.ClipCopied(AKind: TClipKind; const AText: string; const AData: TBytes);
@@ -549,57 +558,6 @@ var
 begin
   if SelectedClip(C) and Assigned(FOnEditSnippet) then
     FOnEditSnippet(C.Id);
-end;
-
-procedure TClipboardPage.AIClick(Sender: TObject);
-begin
-  FAIMenu.Open;
-end;
-
-{ Manda o texto selecionado para a IA. Só sai daqui com o clique: o histórico
-  nunca vai sozinho para a internet. }
-procedure TClipboardPage.AIItemClick(Sender: TObject; const AID: string);
-var
-  C: TClip;
-  Action: TAIAction;
-  Prompt, System_: string;
-  Config: TAIConfig;
-begin
-  if not SelectedClip(C) then
-    Exit;
-  Config := LoadAIConfig;
-  if not Config.Ready then
-  begin
-    TUIToastManager.Show('Configure a IA em Configurações › IA', ttWarning, 4000);
-    Exit;
-  end;
-  Action := TAIAction(StrToInt(AID));
-  Prompt := ActionPrompt(Action, C.Text, System_);
-  TUIToastManager.Show('Perguntando à IA...', ttLoading, 3000);
-  TTask.Run(
-    procedure
-    var
-      Answer: string;
-      Ok: Boolean;
-    begin
-      try
-        Ok := AskAI(Config, System_, Prompt, Answer);
-      except
-        on E: Exception do
-        begin
-          Ok := False;
-          Answer := E.Message;
-        end;
-      end;
-      QueueUI(
-        procedure
-        begin
-          if Ok then
-            AddResult(Answer, AIActionNames[Action] + ': resposta copiada')
-          else
-            TUIToastManager.Show('A IA não respondeu: ' + Answer, ttError, 6000);
-        end);
-    end);
 end;
 
 procedure TClipboardPage.ConvertClick(Sender: TObject);

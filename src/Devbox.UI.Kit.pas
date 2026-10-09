@@ -15,9 +15,17 @@ uses
   UI.Toggle;
 
 type
+  { Atalho do rodapé: tecla, o que faz e a ação (clicar no texto faz o mesmo). }
+  TDevShortcut = record
+    Keys, Caption: string;
+    Action: TProc;
+  end;
+
   { Uma tela do menu lateral. Caption = título no topo; Hint = linha de baixo. }
   TDevPage = class(TPanel)
   protected
+    { True: F5 chama PageRefresh e o rodapé mostra "F5 Atualizar". }
+    FRefreshable: Boolean;
     function NewPanel(AParent: TWinControl; AAlign: TAlign; AHeight: Integer = 0): TPanel;
     function NewButton(AParent: TWinControl; const ACaption: string; AOnClick: TNotifyEvent;
       AVariant: TUIButtonVariant = bvOutline; AAlign: TAlign = alLeft): TUIButton;
@@ -32,7 +40,20 @@ type
     procedure PageHidden; virtual;
     { Tecla do form com a tela na frente. True = tratou. }
     function PageKey(var AKey: Word; AShift: TShiftState): Boolean; virtual;
+    { F5 com a tela na frente. }
+    procedure PageRefresh; virtual;
+    { O que está na tela para o assistente (texto escolhido, e-mail ou log aberto). Vazio = nada. }
+    function PageContext: string; virtual;
+    { Atalhos da tela para o rodapé (F5 e Esc o rodapé põe sozinho). }
+    function PageShortcuts: TArray<TDevShortcut>; virtual;
+    property Refreshable: Boolean read FRefreshable;
   end;
+
+function DevShortcut(const AKeys, ACaption: string; const AAction: TProc): TDevShortcut;
+
+var
+  { A janela principal refaz o rodapé (tela com abas chama ao trocar de aba). }
+  ShortcutsChanged: TProc;
 
 var
   { Ligada no começo da destruição da janela. Resposta de tarefa de fundo que
@@ -72,6 +93,8 @@ const
   IconMail = 'M3 6.75h18v10.5H3z M3 7.5l9 6 9-6';
   IconCalendar = 'M4.5 6h15v14.25h-15z M4.5 10.5h15 M8.25 3.75v3.75 M15.75 3.75v3.75';
   IconUser = 'M12 3.75a3.75 3.75 0 1 0 0 7.5 3.75 3.75 0 0 0 0-7.5z M4.5 20.25a7.5 7.5 0 0 1 15 0';
+  IconHome = 'M3 11.25 12 4.5l9 6.75 M5.25 9.75v10.5h4.5v-6h4.5v6h4.5V9.75';
+  IconTimer = 'M9.75 2.25h4.5 M12 2.25v2.25 M12 4.5a8.25 8.25 0 1 0 0 16.5 8.25 8.25 0 0 0 0-16.5z M12 8.25v4.5l3 1.5';
   IconNews = 'M5.25 4.5h13.5v15H5.25z M8.25 8.25h7.5 M8.25 12h7.5 M8.25 15.75h4.5';
   IconIssues = 'M2.25 12s3.75-6.75 9.75-6.75S21.75 12 21.75 12s-3.75 6.75-9.75 6.75S2.25 12 2.25 12z ' +
     'M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z';
@@ -164,6 +187,27 @@ end;
 function TDevPage.PageKey(var AKey: Word; AShift: TShiftState): Boolean;
 begin
   Result := False;
+end;
+
+procedure TDevPage.PageRefresh;
+begin
+end;
+
+function TDevPage.PageContext: string;
+begin
+  Result := '';
+end;
+
+function TDevPage.PageShortcuts: TArray<TDevShortcut>;
+begin
+  Result := nil;
+end;
+
+function DevShortcut(const AKeys, ACaption: string; const AAction: TProc): TDevShortcut;
+begin
+  Result.Keys := AKeys;
+  Result.Caption := ACaption;
+  Result.Action := AAction;
 end;
 
 function TDevPage.NewPanel(AParent: TWinControl; AAlign: TAlign; AHeight: Integer): TPanel;

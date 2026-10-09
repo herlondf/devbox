@@ -19,6 +19,7 @@ uses
   UI.ProgressBar,
   Devbox.Model,
   Devbox.Jobs,
+  Devbox.UI.SidePeek,
   Devbox.UI.Kit;
 
 type
@@ -40,11 +41,13 @@ type
     FProgress: TUIProgressBar;
     FRefreshTimer: TTimer;
     FLogPanel: TPanel;
+    FLogPeek: TSidePeek;
     FLogTitle: TUILabel;
     FLogScroll: TUIScrollArea;
     FLog: TUICode;
     FKillPid: Cardinal;
     FOnWatchRequest: TWatchRequestEvent;
+    procedure CardsResize(Sender: TObject);
     procedure WatchContainer(Sender: TObject);
     procedure WatchPort(Sender: TObject);
     procedure RefreshServices;
@@ -68,11 +71,12 @@ type
     procedure PortKill(Sender: TObject);
     procedure PortKillConfirmed(Sender: TObject);
     procedure LogClose(Sender: TObject);
-    procedure LogExplain(Sender: TObject);
   public
     constructor Create(AOwner: TComponent); override;
+    procedure PageRefresh; override;
     procedure PageShown; override;
     procedure PageHidden; override;
+    function PageContext: string; override;
     { "Avisar quando parar": a tela de Avisos é quem vigia. }
     property OnWatchRequest: TWatchRequestEvent read FOnWatchRequest write FOnWatchRequest;
   end;
@@ -80,6 +84,7 @@ type
 implementation
 
 uses
+  Vcl.Forms,
   System.StrUtils,
   System.Math,
   System.Threading,
@@ -94,6 +99,7 @@ uses
 const
   CRefreshMs = 30000;  // cada volta roda ~1,5 s de wsl por distro ligada
   CLogLines = 200;
+  CLogPeekW = 680;
 
 function StateText(const AState: string): string;
 begin
@@ -126,9 +132,23 @@ begin
   end;
 end;
 
+procedure TServicesPage.CardsResize(Sender: TObject);
+var
+  LCards: TPanel;
+  LIndex, LGap, LWidth: Integer;
+begin
+  LCards := TPanel(Sender);
+  LGap := ScaleValue(12);
+  LWidth := (LCards.ClientWidth - LGap * High(FStats)) div Length(FStats);
+  for LIndex := 0 to High(FStats) do
+    FStats[LIndex].SetBounds(LIndex * (LWidth + LGap), 0, LWidth,
+      LCards.ClientHeight - LCards.Padding.Bottom);
+end;
+
 constructor TServicesPage.Create(AOwner: TComponent);
 const
   StatLabels: array[0..3] of string = ('Containers', 'Distros WSL', 'Portas em escuta', 'Motores');
+  CStatTones: array[0..3] of TUISemanticTone = (stPrimary, stInfo, stPrimary, stSuccess);
   TabNames: array[TServiceTab] of string = ('Containers', 'WSL', 'Portas');
 var
   Page, Cards, Bar: TPanel;
@@ -149,6 +169,7 @@ var
 
 begin
   inherited Create(AOwner);
+  FRefreshable := True;
   Caption := 'Serviços';
   Hint := 'Containers, distros WSL e portas em escuta nesta máquina';
   C := UITheme.Tokens.Color;
@@ -161,13 +182,12 @@ begin
     FStats[I] := TUIStat.Create(Self);
     FStats[I].CardLabel := StatLabels[I];
     FStats[I].Value := '–';
-    FStats[I].Width := ScaleValue(220);
-    FStats[I].AlignWithMargins := True;
-    FStats[I].Margins.SetBounds(0, 0, ScaleValue(12), 0);
+    FStats[I].Tone := CStatTones[I];
     FStats[I].Left := (I + 1) * 1000;
-    FStats[I].Align := alLeft;
     FStats[I].Parent := Cards;
   end;
+  // Os 4 cards dividem a largura (antes tinham largura fixa e o último saía cortado).
+  Cards.OnResize := CardsResize;
 
   FServiceTabs := TUITabs.Create(Self);
   for T := Low(TServiceTab) to High(TServiceTab) do
@@ -191,7 +211,6 @@ begin
     Bar := NewPanel(Page, alTop, 52);
     Bar.Padding.SetBounds(0, ScaleValue(8), 0, ScaleValue(8));
     Bar.Visible := False;
-    NewButton(Bar, 'Atualizar', RefreshClick, bvGhost, alRight);
     FToolbars[T] := Bar;
     FSel[T] := -1;
   end;
@@ -208,12 +227,10 @@ begin
   NewButton(FToolbars[stPorts], 'Avisar quando fechar', WatchPort, bvGhost);
 
   // Logs do container: painel de baixo, fecha no X.
-  FLogPanel := NewPanel(Page, alBottom, 260);
-  FLogPanel.Padding.SetBounds(0, ScaleValue(8), 0, 0);
-  FLogPanel.Visible := False;
+  // Logs abrem no painel ao lado da janela (FLogPeek, no primeiro "Ver logs").
+  FLogPanel := NewPanel(Page, alClient);
+  FLogPanel.Parent := nil;
   Bar := NewPanel(FLogPanel, alTop, 36);
-  NewButton(Bar, 'Fechar', LogClose, bvGhost, alRight);
-  NewButton(Bar, 'Explicar com IA', LogExplain, bvGhost, alRight);
   FLogTitle := TUILabel.Create(Self);
   FLogTitle.Bold := True;
   FLogTitle.AutoSize := False;
@@ -285,6 +302,8 @@ end;
 procedure TServicesPage.PageHidden;
 begin
   FRefreshTimer.Enabled := False;
+  if FLogPeek <> nil then
+    FLogPeek.Close_;
 end;
 
 { Docker, WSL e portas numa thread só; a tela atualiza no fim. }
@@ -536,10 +555,15 @@ begin
   Id := C.Id;
   Name := C.Name;
   Cli := C.Cli;
-  FLogTitle.Caption := 'Logs de ' + Name + '  ·  últimas ' + IntToStr(CLogLines) + ' linhas';
+  FLogTitle.Caption := 'Últimas ' + IntToStr(CLogLines) + ' linhas';
   FLog.Text := 'carregando...';
-  FLogPanel.Height := Height * 2 div 5;
-  FLogPanel.Visible := True;
+  if FLogPeek = nil then
+  begin
+    FLogPeek := TSidePeek.CreatePeek(GetParentForm(Self), CLogPeekW);
+    FLogPanel.Parent := FLogPeek.Body;
+  end;
+  FLogPeek.Title := 'Logs de ' + Name;
+  FLogPeek.Open;
   TTask.Run(
     procedure
     var
@@ -581,49 +605,20 @@ begin
     FOnWatchRequest(wkPort, IntToStr(P.Port), '', Format('Porta %d (%s)', [P.Port, P.Process]));
 end;
 
-procedure TServicesPage.LogExplain(Sender: TObject);
-var
-  Config: TAIConfig;
-  Prompt, System_, Title: string;
+function TServicesPage.PageContext: string;
+const
+  CMaxChars = 6000;
 begin
-  Config := LoadAIConfig;
-  if not Config.Ready then
-  begin
-    TUIToastManager.Show('Configure a IA em Configurações › IA', ttWarning, 4000);
-    Exit;
-  end;
-  Prompt := ActionPrompt(aaExplainLog, FLog.Text, System_);
-  Title := FLogTitle.Caption;
-  TUIToastManager.Show('Perguntando à IA...', ttLoading, 3000);
-  TTask.Run(
-    procedure
-    var
-      Answer: string;
-      Ok: Boolean;
-    begin
-      try
-        Ok := AskAI(Config, System_, Prompt, Answer);
-      except
-        on E: Exception do
-        begin
-          Ok := False;
-          Answer := E.Message;
-        end;
-      end;
-      QueueUI(
-        procedure
-        begin
-          if Ok then
-            ShowTextDialog('IA sobre ' + Title, Answer)
-          else
-            TUIToastManager.Show('A IA não respondeu: ' + Answer, ttError, 6000);
-        end);
-    end);
+  Result := '';
+  if (FLogPeek <> nil) and FLogPeek.IsOpen then
+    Result := FLogPeek.Title + ' (fim do log, mais novo embaixo):' + sLineBreak +
+      Copy(FLog.Text, Max(1, Length(FLog.Text) - CMaxChars), CMaxChars);
 end;
 
 procedure TServicesPage.LogClose(Sender: TObject);
 begin
-  FLogPanel.Visible := False;
+  if FLogPeek <> nil then
+    FLogPeek.Close_;
 end;
 
 procedure TServicesPage.DistroOpen(Sender: TObject);
@@ -682,5 +677,10 @@ begin
   RefreshServices;
 end;
 
+
+procedure TServicesPage.PageRefresh;
+begin
+  RefreshServices;
+end;
 
 end.

@@ -307,6 +307,9 @@ const
   begin
     // NonPackaged guarda o caminho com # no lugar de \.
     N := ExtractFileName(StringReplace(AName, '#', '\', [rfReplaceAll]));
+    // O próprio Devbox usa o microfone (assistente de voz): não é reunião.
+    if SameText(N, ExtractFileName(ParamStr(0))) or SameText(N, 'DevboxHelper.exe') then
+      Exit;
     if IndexText(N, Result) < 0 then
       Result := Result + [N];
   end;

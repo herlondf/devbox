@@ -2,7 +2,7 @@ unit Devbox.Issues.AI;
 
 { Provedor de IA do assistente escolhido nas Configurações. Anthropic usa o
   provedor da ComponentesUI; os demais (OpenAI, Grok, DeepSeek, Groq,
-  OpenRouter, Ollama, URL própria) usam a API compatível com OpenAI
+  OpenRouter, Gemini, Ollama, URL própria) usam a API compatível com OpenAI
   (/chat/completions), só texto: o assistente do Vigia responde sobre os dados
   que estão no prompt de sistema, sem ferramentas.
   Toda resposta passa pela fábrica do Vigia, que grava tokens e custo. }
@@ -14,7 +14,7 @@ uses
   UI.Assistant.Provider;
 
 type
-  TAiProviderKind = (apAnthropic, apOpenAI, apGrok, apDeepSeek, apGroq, apOpenRouter, apOllama, apCustom);
+  TAiProviderKind = (apAnthropic, apOpenAI, apGrok, apDeepSeek, apGroq, apOpenRouter, apGemini, apOllama, apCustom);
 
   TAiConfig = record
     Kind: TAiProviderKind;
@@ -25,15 +25,15 @@ type
 
 const
   AiProviderNames: array[TAiProviderKind] of string = (
-    'Anthropic (Claude)', 'OpenAI', 'xAI (Grok)', 'DeepSeek', 'Groq', 'OpenRouter',
+    'Anthropic (Claude)', 'OpenAI', 'xAI (Grok)', 'DeepSeek', 'Groq', 'OpenRouter', 'Google (Gemini)',
     'Ollama (local)', 'Outro compatível com OpenAI');
   AiProviderIds: array[TAiProviderKind] of string = (
-    'anthropic', 'openai', 'grok', 'deepseek', 'groq', 'openrouter', 'ollama', 'custom');
+    'anthropic', 'openai', 'grok', 'deepseek', 'groq', 'openrouter', 'gemini', 'ollama', 'custom');
   // Endpoints públicos de cada provedor; editáveis na tela.
   AiDefaultBaseUrls: array[TAiProviderKind] of string = (
     'https://api.anthropic.com', 'https://api.openai.com/v1', 'https://api.x.ai/v1',
     'https://api.deepseek.com/v1', 'https://api.groq.com/openai/v1', 'https://openrouter.ai/api/v1',
-    'http://localhost:11434/v1', '');
+    'https://generativelanguage.googleapis.com/v1beta/openai', 'http://localhost:11434/v1', '');
   AiDefaultModel = 'claude-sonnet-5-5';
 
 { Configuração atual (preferências + chave do Credential Manager). }
@@ -71,6 +71,7 @@ implementation
 
 uses
   Devbox.UI.Kit,
+  Devbox.AI,
   System.StrUtils,
   System.DateUtils,
   System.Generics.Collections,
@@ -578,6 +579,22 @@ begin
   if HasUIAIProviderFactory and not Assigned(GSuiteFactory) then
     GSuiteFactory := GetUIAIProviderFactory();
   RegisterUIAIProviderFactory(CreateVigiaAiProvider);
+  // A mesma config vale para as ações de texto (Devbox.AI); pronta ou não, decide lá.
+  Devbox.AI.AIConfigSource :=
+    function(out AConfig: Devbox.AI.TAIConfig): Boolean
+    var
+      LCfg: TAiConfig;
+    begin
+      LCfg := CurrentAiConfig;
+      if LCfg.Kind = apAnthropic then
+        AConfig.Provider := Devbox.AI.apAnthropic
+      else
+        AConfig.Provider := Devbox.AI.apOpenAI;
+      AConfig.BaseUrl := LCfg.BaseUrl;
+      AConfig.Model := LCfg.Model;
+      AConfig.Key := LCfg.ApiKey;
+      Result := AConfig.Ready and ((AConfig.Key <> '') or (LCfg.Kind = apOllama));
+    end;
 end;
 
 end.

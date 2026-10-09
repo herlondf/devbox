@@ -13,22 +13,26 @@ uses
   Devbox.AI,
   Devbox.Google,
   Devbox.MailSource,
+  Devbox.Issues.Model,
   Devbox.Realtime;
 
 type
-  TVoiceAction = (vaConversa, vaEmails, vaAgenda, vaReuniao, vaFocoLigar, vaFocoDesligar, vaAbrir, vaEncerrar);
+  TVoiceAction = (vaConversa, vaEmails, vaAgenda, vaReuniao, vaFocoLigar, vaFocoDesligar, vaAbrir, vaEncerrar,
+    vaIssues);
 
   TVoiceContext = record
     Config: TAIConfig;
     Accounts: TMailAccounts;
     Today: TCalEvents;          // eventos de hoje, em ordem
-    Upcoming: TCalEvents;       // próximos (para "próxima reunião")
+    Upcoming: TCalEvents;       // de 7 dias atrás a 31 à frente (amanhã, próxima reunião)
+    Issues: TItems;             // issues abertas das contas ligadas (o retrato do último poll)
     Now: TDateTime;
   end;
 
   TVoiceReply = record
     Action: TVoiceAction;
-    Page: string;      // vaAbrir: 'mail', 'agenda', 'digest', 'clipboard'...
+    Page: string;      // vaAbrir: 'home', 'issues', 'mail', 'agenda', 'clipboard'...
+    Day: TDateTime;    // vaAgenda: o dia pedido (0 = hoje)
     Speech: string;    // o que falar
   end;
 
@@ -44,7 +48,11 @@ function RunRealtimeTool(const AName, AArgs: string; const ACtx: TVoiceContext; 
 
 // Partes puras (self-check)
 function ParseVoiceIntent(const AAnswer: string; out AReply: TVoiceReply): Boolean;
-function AgendaSpeech(const AEvents: TCalEvents): string;
+function AgendaSpeech(const AEvents: TCalEvents; const ADayLabel: string = 'Hoje'): string;
+{ Eventos que caem no dia (os de dia todo que cobrem o dia também). }
+function EventsOn(const AEvents: TCalEvents; ADay: TDateTime): TCalEvents;
+{ "hoje", "amanha" ou AAAA-MM-DD; 0 se não entendeu. }
+function ParseVoiceDay(const AText: string; AToday: TDateTime): TDateTime;
 function NextMeetingSpeech(const AEvents: TCalEvents; ANow: TDateTime): string;
 function SpokenTime(ATime: TDateTime): string;
 
@@ -61,20 +69,31 @@ const
   CIntentTokens = 400;
   CSummaryTokens = 500;
   CActionNames: array[TVoiceAction] of string = ('conversa', 'emails', 'agenda', 'reuniao', 'foco_ligar',
-    'foco_desligar', 'abrir', 'encerrar');
+    'foco_desligar', 'abrir', 'encerrar', 'issues');
+  CWeekDays: array[1..7] of string = ('domingo', 'segunda-feira', 'terça-feira', 'quarta-feira', 'quinta-feira',
+    'sexta-feira', 'sábado');
+  CMaxToolIssues = 25;
+  CPages = '"home","issues","mail","agenda","focus","pomodoro","clipboard","tools","services","cleanup",' +
+    '"network","system","jobs","settings","ai"';
   CRealtimeInstructions = 'Você é o assistente de voz do Devbox, no computador de um desenvolvedor. Fale português ' +
     'do Brasil, curto e natural, como numa conversa: no máximo 2 ou 3 frases por vez, sem listas nem símbolos. ' +
-    'Use as ferramentas para e-mails, agenda, reuniões, modo foco e para abrir telas do Devbox; não invente dados. ' +
+    'Use as ferramentas para e-mails, agenda (de qualquer dia), reuniões, issues e tarefas (GitHub, Jira), modo foco ' +
+    'e para abrir telas do Devbox; não invente dados. ' +
     'Ao ler e-mails, diga quem mandou e o que pede, do mais urgente para o menos. Quando o usuário se despedir ou ' +
     'pedir para parar, diga tchau em poucas palavras e chame encerrar_conversa.';
   CNoParams = '{"type":"object","properties":{}}';
   CMaxToolMails = 15;
   CIntentSystem = 'Você é o assistente de voz do Devbox, de um desenvolvedor no Windows. O pedido veio de fala ' +
     'transcrita (pode ter erros). Escolha UMA ação: "emails" (resumir ou ler e-mails), ' +
-    '"agenda" (compromissos de hoje), "reuniao" (próxima reunião), "foco_ligar", "foco_desligar", "abrir" (abrir ' +
-    'uma tela: email, agenda, digest, clipboard, services, cleanup, network, system, jobs, settings) ou ' +
-    '"conversa" (qualquer outra coisa: responda você mesmo em "fala", em português, no máximo 2 frases curtas, ' +
-    'sem markdown). Responda SÓ com JSON: {"acao":"...","tela":"...","fala":"..."}';
+    '"agenda" (compromissos de um dia; em "dia": "hoje", "amanha" ou AAAA-MM-DD), "reuniao" (próxima reunião), ' +
+    '"issues" (perguntas sobre issues, tarefas, PRs, prazos do GitHub ou Jira), "foco_ligar", "foco_desligar", ' +
+    '"abrir" (abrir uma tela: home, issues, email, agenda, focus, pomodoro, clipboard, tools, services, cleanup, ' +
+    'network, system, jobs, settings, ai) ou "conversa" (qualquer outra coisa: responda você mesmo em "fala", em ' +
+    'português, no máximo 2 frases curtas, sem markdown). Responda SÓ com JSON: ' +
+    '{"acao":"...","tela":"...","dia":"...","fala":"..."}';
+  CIssuesSystem = 'Responda o pedido para ser FALADO em voz alta, em português do Brasil, usando só a lista de ' +
+    'issues abaixo: no máximo 4 frases curtas, sem listas, sem símbolos, sem markdown, sem links. Diga a chave só ' +
+    'quando ajudar. Se a lista não responde, diga isso em uma frase.';
   CSummarySystem = 'Resuma para ser FALADO em voz alta, em português do Brasil: no máximo 4 frases curtas, sem ' +
     'listas, sem símbolos, sem markdown, sem endereços de e-mail. Diga quem mandou e o que pede, começando pelo ' +
     'mais urgente. Se não houver nada importante, diga isso em uma frase.';
@@ -90,13 +109,40 @@ begin
     Result := Format('%d e %d', [LHour, LMin]);
 end;
 
-function AgendaSpeech(const AEvents: TCalEvents): string;
+function EventsOn(const AEvents: TCalEvents; ADay: TDateTime): TCalEvents;
+var
+  LEvent: TCalEvent;
+begin
+  Result := nil;
+  ADay := Trunc(ADay);
+  for LEvent in AEvents do
+    if (Trunc(LEvent.Start) = ADay) or (LEvent.AllDay and (LEvent.Start <= ADay) and (LEvent.Finish > ADay)) then
+      Result := Result + [LEvent];
+end;
+
+function ParseVoiceDay(const AText: string; AToday: TDateTime): TDateTime;
+var
+  LText: string;
+  LYear, LMonth, LDay: Integer;
+begin
+  Result := 0;
+  LText := LowerCase(Trim(AText));
+  if (LText = '') or (LText = 'hoje') then
+    Exit(Trunc(AToday));
+  if (LText = 'amanha') or (LText = 'amanhã') then
+    Exit(Trunc(AToday) + 1);
+  if (Length(LText) = 10) and TryStrToInt(Copy(LText, 1, 4), LYear) and TryStrToInt(Copy(LText, 6, 2), LMonth) and
+    TryStrToInt(Copy(LText, 9, 2), LDay) and IsValidDate(LYear, LMonth, LDay) then
+    Result := EncodeDate(LYear, LMonth, LDay);
+end;
+
+function AgendaSpeech(const AEvents: TCalEvents; const ADayLabel: string): string;
 var
   LEvent: TCalEvent;
   LParts: TArray<string>;
 begin
   if AEvents = nil then
-    Exit('Você não tem compromissos hoje.');
+    Exit(Format('%s você não tem compromissos.', [ADayLabel]));
   LParts := nil;
   for LEvent in AEvents do
     if LEvent.AllDay then
@@ -104,9 +150,9 @@ begin
     else
       LParts := LParts + ['às ' + SpokenTime(LEvent.Start) + ', ' + LEvent.Title];
   if Length(AEvents) = 1 then
-    Result := 'Hoje você tem um compromisso: ' + LParts[0] + '.'
+    Result := ADayLabel + ' você tem um compromisso: ' + LParts[0] + '.'
   else
-    Result := Format('Hoje você tem %d compromissos: %s.', [Length(AEvents), string.Join('; ', LParts)]);
+    Result := Format('%s você tem %d compromissos: %s.', [ADayLabel, Length(AEvents), string.Join('; ', LParts)]);
 end;
 
 function NextMeetingSpeech(const AEvents: TCalEvents; ANow: TDateTime): string;
@@ -139,7 +185,9 @@ end;
 
 function RealtimeInstructions: string;
 begin
-  Result := CRealtimeInstructions;
+  // A data entra aqui: "amanhã" e "sexta" viram AAAA-MM-DD do lado da IA.
+  Result := CRealtimeInstructions + Format(' Hoje é %s, %s.', [CWeekDays[DayOfWeek(Date)],
+    FormatDateTime('yyyy-mm-dd', Date)]);
 end;
 
 function Tool(const AName, ADescription, AParams: string): TRealtimeTool;
@@ -155,12 +203,19 @@ begin
     Tool('emails_importantes', 'E-mails importantes não lidos de todas as contas ligadas no Devbox (remetente, ' +
       'assunto, trecho).', CNoParams),
     Tool('agenda_hoje', 'Compromissos de hoje, em ordem (hora, título, se tem link do Meet).', CNoParams),
+    Tool('agenda_do_dia', 'Compromissos de um dia (até 31 dias à frente ou 7 para trás), em ordem.',
+      '{"type":"object","properties":{"data":{"type":"string","description":"AAAA-MM-DD"}},"required":["data"]}'),
+    Tool('minhas_issues', 'Issues e PRs abertos do usuário no GitHub e no Jira (chave, título, status, prazo, ' +
+      'impedimento). Filtro: todas, vencendo (prazo nos próximos 7 dias), atrasadas, impedidas ou mencionado.',
+      '{"type":"object","properties":{"filtro":{"type":"string","enum":["todas","vencendo","atrasadas",' +
+      '"impedidas","mencionado"]}}}'),
+    Tool('issue', 'Detalhe de uma issue pela chave (ex.: PROJ-12 ou dono/repo#3): status, prazo, último comentário.',
+      '{"type":"object","properties":{"chave":{"type":"string"}},"required":["chave"]}'),
     Tool('proxima_reuniao', 'A próxima reunião que ainda não acabou.', CNoParams),
     Tool('modo_foco', 'Liga ou desliga o modo foco do Devbox (silencia avisos).',
       '{"type":"object","properties":{"ligar":{"type":"boolean"}},"required":["ligar"]}'),
     Tool('abrir_tela', 'Abre uma tela do Devbox na frente do usuário.',
-      '{"type":"object","properties":{"tela":{"type":"string","enum":["mail","agenda","digest","clipboard",' +
-      '"services","cleanup","network","system","jobs","settings"]}},"required":["tela"]}'),
+      '{"type":"object","properties":{"tela":{"type":"string","enum":[' + CPages + ']}},"required":["tela"]}'),
     Tool('encerrar_conversa', 'Termina a conversa por voz (depois da despedida).', CNoParams)];
 end;
 
@@ -178,8 +233,67 @@ begin
   Result.AddPair('tem_meet', TJSONBool.Create(AEvent.MeetUrl <> ''));
 end;
 
+function IssueJson(const AItem: TItem; ADetail: Boolean): TJSONObject;
+begin
+  Result := TJSONObject.Create;
+  Result.AddPair('chave', AItem.Key);
+  Result.AddPair('titulo', AItem.Title);
+  Result.AddPair('status', AItem.Status);
+  if AItem.DueDate > 0 then
+    Result.AddPair('prazo', FormatDateTime('yyyy-mm-dd', AItem.DueDate));
+  if AItem.Flagged then
+    Result.AddPair('impedida', TJSONBool.Create(True));
+  if AItem.Assignee <> '' then
+    Result.AddPair('responsavel', AItem.Assignee);
+  if ADetail then
+  begin
+    Result.AddPair('comentarios', TJSONNumber.Create(AItem.CommentCount));
+    if AItem.LastCommentText <> '' then
+      Result.AddPair('ultimo_comentario', AItem.LastCommentBy + ': ' + Copy(AItem.LastCommentText, 1, 600));
+    if AItem.CiState <> '' then
+      Result.AddPair('ci', AItem.CiState);
+    if AItem.ReviewState <> '' then
+      Result.AddPair('review', AItem.ReviewState);
+  end;
+end;
+
+function IssuesFiltered(const AItems: TItems; const AFilter: string; ANow: TDateTime): TItems;
+var
+  LItem: TItem;
+  LTake: Boolean;
+begin
+  Result := nil;
+  for LItem in AItems do
+  begin
+    if AFilter = 'vencendo' then
+      LTake := (LItem.DueDate > 0) and (Trunc(LItem.DueDate) >= Trunc(ANow)) and (LItem.DueDate < Trunc(ANow) + 8)
+    else if AFilter = 'atrasadas' then
+      LTake := (LItem.DueDate > 0) and (Trunc(LItem.DueDate) < Trunc(ANow))
+    else if AFilter = 'impedidas' then
+      LTake := LItem.Flagged
+    else if AFilter = 'mencionado' then
+      LTake := LItem.MentionsMe
+    else
+      LTake := True;
+    if LTake then
+      Result := Result + [LItem];
+  end;
+end;
+
+function IssuesJson(const AItems: TItems): TJSONArray;
+var
+  LItem: TItem;
+begin
+  Result := TJSONArray.Create;
+  for LItem in Copy(AItems, 0, CMaxToolIssues) do
+    Result.AddElement(IssueJson(LItem, False));
+end;
+
 function RunRealtimeTool(const AName, AArgs: string; const ACtx: TVoiceContext; out AReply: TVoiceReply): string;
 var
+  LDay: TDateTime;
+  LItem: TItem;
+  LItems: TItems;
   LResult: TJSONObject;
   LList: TJSONArray;
   LArgs: TJSONValue;
@@ -201,6 +315,44 @@ begin
       for LEvent in ACtx.Today do
         LList.AddElement(EventJson(LEvent));
       LResult.AddPair('compromissos', LList);
+    end
+    else if AName = 'agenda_do_dia' then
+    begin
+      LDay := 0;
+      if LArgs <> nil then
+        LDay := ParseVoiceDay(LArgs.GetValue<string>('data', ''), ACtx.Now);
+      if LDay = 0 then
+        LResult.AddPair('erro', 'data no formato AAAA-MM-DD')
+      else
+      begin
+        LList := TJSONArray.Create;
+        for LEvent in EventsOn(ACtx.Upcoming, LDay) do
+          LList.AddElement(EventJson(LEvent));
+        LResult.AddPair('dia', FormatDateTime('yyyy-mm-dd', LDay) + ' (' + CWeekDays[DayOfWeek(LDay)] + ')');
+        LResult.AddPair('compromissos', LList);
+      end;
+    end
+    else if AName = 'minhas_issues' then
+    begin
+      LItems := IssuesFiltered(ACtx.Issues, IfThen(LArgs <> nil, LArgs.GetValue<string>('filtro', 'todas'), 'todas'),
+        ACtx.Now);
+      LResult.AddPair('hoje', FormatDateTime('yyyy-mm-dd', ACtx.Now));
+      LResult.AddPair('total', TJSONNumber.Create(Length(LItems)));
+      LResult.AddPair('issues', IssuesJson(LItems));
+    end
+    else if AName = 'issue' then
+    begin
+      LFound := False;
+      if LArgs <> nil then
+        for LItem in ACtx.Issues do
+          if SameText(LItem.Key, Trim(LArgs.GetValue<string>('chave', ''))) then
+          begin
+            LResult.AddPair('issue', IssueJson(LItem, True));
+            LFound := True;
+            Break;
+          end;
+      if not LFound then
+        LResult.AddPair('erro', 'issue não está entre as abertas do usuário');
     end
     else if AName = 'proxima_reuniao' then
     begin
@@ -281,6 +433,7 @@ begin
       LIndex := Ord(vaConversa);
     AReply.Action := TVoiceAction(LIndex);
     AReply.Page := LowerCase(LJson.GetValue<string>('tela', ''));
+    AReply.Day := ParseVoiceDay(LJson.GetValue<string>('dia', ''), Date);
     AReply.Speech := Trim(LJson.GetValue<string>('fala', ''));
     if AReply.Page = 'email' then
       AReply.Page := 'mail';
@@ -296,6 +449,7 @@ var
   LAnswer, LSys, LPrompt, LErr: string;
   LMsgs, LOne: TMailMsgs;
   LAccount: TMailAccount;
+  LIssues: TJSONArray;
 begin
   AError := '';
   AReply := Default(TVoiceReply);
@@ -311,7 +465,32 @@ begin
   end;
   case AReply.Action of
     vaAgenda:
-      AReply.Speech := AgendaSpeech(ACtx.Today);
+      if (AReply.Day = 0) or (Trunc(AReply.Day) = Trunc(ACtx.Now)) then
+        AReply.Speech := AgendaSpeech(ACtx.Today)
+      else if Trunc(AReply.Day) = Trunc(ACtx.Now) + 1 then
+        AReply.Speech := AgendaSpeech(EventsOn(ACtx.Upcoming, AReply.Day), 'Amanhã')
+      else
+        AReply.Speech := AgendaSpeech(EventsOn(ACtx.Upcoming, AReply.Day), CWeekDays[DayOfWeek(AReply.Day)] + ', ' +
+          FormatDateTime('dd/mm', AReply.Day) + ',');
+    vaIssues:
+      if ACtx.Issues = nil then
+        AReply.Speech := 'Não achei issues abertas nas contas ligadas do Devbox.'
+      else
+      begin
+        LIssues := IssuesJson(ACtx.Issues);
+        try
+          LPrompt := Format('Hoje: %s.'#10'Pedido: %s'#10#10'Issues abertas (até %d):'#10'%s',
+            [FormatDateTime('yyyy-mm-dd', ACtx.Now), AText, CMaxToolIssues, LIssues.ToJSON]);
+        finally
+          LIssues.Free;
+        end;
+        if not AskAI(ACtx.Config, CIssuesSystem, LPrompt, LAnswer, CSummaryTokens) then
+        begin
+          AError := LAnswer;
+          Exit(False);
+        end;
+        AReply.Speech := LAnswer;
+      end;
     vaReuniao:
       AReply.Speech := NextMeetingSpeech(ACtx.Upcoming, ACtx.Now);
     vaFocoLigar:

@@ -85,13 +85,15 @@
     <DCCReference Include="Devbox.UI.Clipboard.pas"/>
     <DCCReference Include="Devbox.UI.Expander.pas"/>
     <DCCReference Include="Devbox.UI.Focus.pas"/>
+    <DCCReference Include="Devbox.UI.Pomodoro.pas"/>
+    <DCCReference Include="Devbox.UI.SidePeek.pas"/>
+    <DCCReference Include="Devbox.UI.HostPage.pas"/>
     <DCCReference Include="Devbox.UI.Tools.pas"/>
     <DCCReference Include="Devbox.UI.Services.pas"/>
     <DCCReference Include="Devbox.UI.Cleanup.pas"/>
     <DCCReference Include="Devbox.UI.Network.pas"/>
     <DCCReference Include="Devbox.UI.System.pas"/>
     <DCCReference Include="Devbox.UI.Envs.pas"/>
-    <DCCReference Include="Devbox.UI.AICommand.pas"/>
     <DCCReference Include="Devbox.UI.Jobs.pas"/>
     <DCCReference Include="Devbox.UI.Watches.pas"/>
     <DCCReference Include="Devbox.UI.Settings.pas"/>

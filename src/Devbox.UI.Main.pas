@@ -1,4 +1,4 @@
-unit Devbox.UI.Main;
+﻿unit Devbox.UI.Main;
 
 { Janela única: menu lateral com as telas (TDevPage), cabeçalho com título e
   tema, ícone da bandeja e atalho global Win+Alt+B. }
@@ -34,6 +34,8 @@ uses
   Devbox.UI.Envs,
   Devbox.UI.Focus,
   Devbox.UI.Pomodoro,
+  Devbox.UI.Wsl,
+  Devbox.UI.Git,
   Devbox.UI.Tools,
   Devbox.UI.System,
   Devbox.UI.Settings,
@@ -66,9 +68,18 @@ type
     FFocusPage: TFocusPage;
     FToolsPage: TToolsPage;
     FPomodoro: TPomodoroPage;
+    FEnvsPage: TEnvsPage;
+    FJobsPage: TJobsPage;
+    FNetworkPage: TNetworkPage;
+    FCleanupPage: TCleanupPage;
+    FGitPage: TGitPage;
     FIssuesConfig: THostPage;
     FHealthTimer: TTimer;
     FHealthRunning: Boolean;
+    FPomodoroText: string;
+    FBalloonExplain: Boolean;      // clique no aviso explica o erro copiado
+    FExplainText: string;
+    FExplainOfferedAt: UInt64;
     FBalloonPage: string;          // tela que o clique no aviso abre (manutenção: Limpeza)
     FFocusItem: TMenuItem;
     FGooglePage: TGooglePage;
@@ -100,7 +111,17 @@ type
     function ScreenContext: string;
     function MyDayText: string;
     procedure RegisterMailTools;
+    procedure RegisterAppTools;
+    procedure RegisterSearch;
+    procedure RegisterMemoryTools;
+    function CopyClipProc(const AText: string): TProc;
+    function OpenMailProc(const AId: string): TProc;
+    function RunEnvProc(const AName: string): TProc;
+    procedure OfferExplain(const AText: string);
+    procedure ExplainClick(Sender: TObject);
     procedure HealthTick(Sender: TObject);
+    procedure UpdateMiniStatus;
+    procedure MiniMenuClick(Sender: TObject);
     procedure HealthNow(Sender: TObject);
     procedure RunHealth(AManual: Boolean; const AOnDone: TProc<string> = nil);
     procedure TrayBalloonClick(Sender: TObject);
@@ -110,6 +131,9 @@ type
     procedure ApplyThemeColors;
     procedure ApplyCompactSize;
     procedure ThemeChanged(Sender: TObject; AMode: TUIThemeMode);
+    procedure ApplyThemeSetting;
+    procedure ApplyTableDensity(AParent: TWinControl);
+    procedure LookChanged(Sender: TObject);
     procedure ThemeSwapToggle(Sender: TObject);
     procedure SetHotkey(AOn: Boolean);
     procedure HotkeySettingChanged(Sender: TObject);
@@ -161,6 +185,8 @@ uses
   Vcl.Clipbrd,
   Devbox.Sys,
   UI.CommandPalette,
+  UI.CommandSearch,
+  UI.DataTable,
   Devbox.Issues.Model,
   UI.Icons.Heroicons,
   Devbox.UI.Dialogs,
@@ -173,6 +199,10 @@ uses
   Devbox.Speech,
   UI.Audio.Capture,
   Devbox.Health,
+  Devbox.Jobs,
+  Devbox.Wsl,
+  Devbox.Git,
+  Devbox.Cleanup,
   Devbox.Store;
 
 const
@@ -181,6 +211,8 @@ const
 
 type
   TFooterLabel = class(TControl);
+
+function MemoryContext: string; forward;
 
 var
   WM_DEVBOX_SHOW: Cardinal;
@@ -252,10 +284,7 @@ begin
   OnKeyDown := FormKeyDown;
   OnCloseQuery := FormCloseQuery;
 
-  case IndexText(Store.GetSetting('theme'), ['light', 'dark']) of
-    0: UITheme.Mode := tmLight;
-    1: UITheme.Mode := tmDark;
-  end;
+  ApplyThemeSetting;
   ApplyCompactSize;
   TUIToastManager.Position := tpBottomRight;
   // Acima do rodapé de atalhos e do botão do assistente, que ficam no canto de baixo.
@@ -311,15 +340,22 @@ begin
   FExpanderPage.OnChanged := ExpanderChanged;
   FToolsPage := TToolsPage.Create(Self, FClipboard, FExpanderPage);
   AddPage('tools', 'Ferramentas', IconWrench, FToolsPage);
+  FGitPage := TGitPage.Create(Self);
+  AddPage('git', 'Ferramentas', IconGit, FGitPage);
   // Expansor e captura moram no DevboxHelper.exe (ver Devbox.Keys).
   StartHelper;
   Services := TServicesPage.Create(Self);
   AddPage('services', 'Ambiente', IconServer, Services);
-  AddPage('cleanup', 'Ambiente', IconBroom, TCleanupPage.Create(Self));
-  AddPage('network', 'Ambiente', IconGlobe, TNetworkPage.Create(Self));
+  AddPage('wsl', 'Ambiente', IconTerminal, TWslPage.Create(Self));
+  FCleanupPage := TCleanupPage.Create(Self);
+  AddPage('cleanup', 'Ambiente', IconBroom, FCleanupPage);
+  FNetworkPage := TNetworkPage.Create(Self);
+  AddPage('network', 'Ambiente', IconGlobe, FNetworkPage);
   AddPage('system', 'Ambiente', IconCpu, TSystemPage.Create(Self));
-  AddPage('envs', 'Automação', IconPlay, TEnvsPage.Create(Self));
-  AddPage('jobs', 'Automação', IconClock, TJobsPage.Create(Self));
+  FEnvsPage := TEnvsPage.Create(Self);
+  AddPage('envs', 'Automação', IconPlay, FEnvsPage);
+  FJobsPage := TJobsPage.Create(Self);
+  AddPage('jobs', 'Automação', IconClock, FJobsPage);
   FWatchesPage := TWatchesPage.Create(Self);
   AddPage('watches', 'Automação', IconBell, FWatchesPage);
   Services.OnWatchRequest := FWatchesPage.AddWatch;
@@ -330,6 +366,7 @@ begin
     end;
   Settings := TSettingsPage.Create(Self);
   Settings.OnHotkeyChanged := HotkeySettingChanged;
+  Settings.OnLookChanged := LookChanged;
   Settings.OnHistoryCleared := HistoryCleared;
   Settings.OnHealthNow := HealthNow;
   FGeneralPage := Settings;
@@ -390,13 +427,27 @@ begin
   AddPage('ai', 'Configuração', IconSparkles, FSettingsPage);
   FSettingsPage.HostAiCards(FIssuesPage.TakeAiSettings);
   FSettingsPage.OnCostsShown := IssuesAiUsage;
+  AskAssistant :=
+    procedure(AText: string)
+    begin
+      FIssuesPage.Assistant.Open;
+      FIssuesPage.Assistant.Ask(AText);
+    end;
+  ErrorCopied :=
+    procedure(AText: string)
+    begin
+      OfferExplain(AText);
+    end;
   FIssuesPage.OnScreenContext :=
     function: string
     begin
-      Result := ScreenContext;
+      Result := MemoryContext + ScreenContext;
     end;
   RegisterDevboxTools;
   RegisterMailTools;
+  RegisterAppTools;
+  RegisterSearch;
+  RegisterMemoryTools;
   // Manutenção do Windows: confere a agenda a cada minuto (Configuração › Geral).
   FHealthTimer := TTimer.Create(Self);
   FHealthTimer.Interval := 60 * 1000;
@@ -452,6 +503,9 @@ begin
         FIssuesPage.Assistant.Open;
         FIssuesPage.Assistant.Ask(GetEnvironmentVariable('DEVBOX_ASSISTANT_ASK'));
       end;
+      // Teste: DEVBOX_PALETTE abre o Ctrl+K já buscando.
+      if GetEnvironmentVariable('DEVBOX_PALETTE') <> '' then
+        FIssuesPage.OpenPaletteWith(GetEnvironmentVariable('DEVBOX_PALETTE'));
     end);
 
   ApplyThemeColors;
@@ -459,6 +513,7 @@ begin
   // Devbox.exe -show -page settings: abre direto numa tela (atalho e teste de tela).
   if not FindCmdLineSwitch('page', LStartPage, True, [clstValueNextParam]) or not PageExists(LStartPage) then
     LStartPage := 'home';
+  ApplyTableDensity(Self);
   ShowPage(LStartPage);
 end;
 
@@ -467,6 +522,8 @@ begin
   AppClosing := True;
   NotifyHandler := nil;
   ShortcutsChanged := nil;
+  AskAssistant := nil;
+  ErrorCopied := nil;
   UITheme.RemoveChangeListener(ThemeChanged);
   FPages.Free;
   FPageOrder.Free;
@@ -524,6 +581,7 @@ begin
   if FSidebar.ActiveItemID <> AID then
     FSidebar.ActiveItemID := AID;
   Page.PageShown;
+  FSubtitle.Caption := Page.Hint;  // a tela pode trocar a linha ao aparecer (Hoje muda com a hora)
   // O assistente (FAB) fica no canto do rodapé, fora do conteúdo das telas.
   FIssuesPage.AttachAssistant(FFooter.Parent, ScaleValue(14), ScaleValue(0));
   FillFooter;
@@ -684,11 +742,11 @@ begin
   FFocusItem := FTrayMenu.Items[FTrayMenu.Items.Count - 1];
   AddItem('Falar com o Devbox', VoiceMenuClick);
   AddItem('Pomodoro: começar ou pausar', PomodoroMenuClick);
+  AddItem('Janela mini (sempre por cima)', MiniMenuClick);
   AddItem('-', nil);
   AddItem('Sair', MenuExitClick);
   FTray := TTrayIcon.Create(Self);
   FTray.Icon.Handle := MakeTrayIcon;
-  Icon.Handle := MakeTrayIcon;
   FTray.Hint := 'Devbox  ·  Win+Alt+B abre o clipboard';
   FTray.PopupMenu := FTrayMenu;
   FTray.OnDblClick := MenuOpenClick;
@@ -712,16 +770,57 @@ begin
 end;
 
 { Campos e botões com 36 px (o preset da suíte é 50). }
+{ Densidade (Configuração › Geral): tamanho de campo e seletor do tema e linhas das tabelas. }
 procedure TMainForm.ApplyCompactSize;
+const
+  CFieldCompact = 36;
+  CSelectorCompact = 22;
+  CFieldComfortable = 42;
+  CSelectorComfortable = 24;
+var
+  LComfortable: Boolean;
+  LField: Integer;
 begin
-  if FApplyingSize or (UITheme.Tokens.Size.FieldBase = 36) then
+  LComfortable := Store.GetSetting('density') = 'comfortable';
+  LField := IfThen(LComfortable, CFieldComfortable, CFieldCompact);
+  if FApplyingSize or (UITheme.Tokens.Size.FieldBase = LField) then
     Exit;
   FApplyingSize := True;
   try
-    UITheme.SetCustomSize(36, 22, 1);
+    UITheme.SetCustomSize(LField, IfThen(LComfortable, CSelectorComfortable, CSelectorCompact), 1);
   finally
     FApplyingSize := False;
   end;
+end;
+
+procedure TMainForm.ApplyThemeSetting;
+begin
+  case IndexText(Store.GetSetting('theme'), ['light', 'dark']) of
+    0: UITheme.Mode := tmLight;
+    1: UITheme.Mode := tmDark;
+  else
+    UITheme.Mode := tmSystem;
+  end;
+end;
+
+{ Linhas das tabelas seguem a densidade (as telas criam compactas). }
+procedure TMainForm.ApplyTableDensity(AParent: TWinControl);
+var
+  I: Integer;
+begin
+  for I := 0 to AParent.ControlCount - 1 do
+    if AParent.Controls[I] is TUIDataTable then
+      TUIDataTable(AParent.Controls[I]).Density := TUITableDensity(IfThen(
+        Store.GetSetting('density') = 'comfortable', Ord(tdStandard), Ord(tdCompact)))
+    else if AParent.Controls[I] is TWinControl then
+      ApplyTableDensity(TWinControl(AParent.Controls[I]));
+end;
+
+procedure TMainForm.LookChanged(Sender: TObject);
+begin
+  ApplyThemeSetting;
+  ApplyCompactSize;
+  ApplyTableDensity(Self);
 end;
 
 procedure TMainForm.ThemeChanged(Sender: TObject; AMode: TUIThemeMode);
@@ -847,6 +946,7 @@ begin
   LPalette.AddCommand('Telas / Expansor de texto', procedure begin ShowPage('expander'); end);
   LPalette.AddCommand('Devbox / Ligar ou desligar o modo foco', procedure begin FFocusPage.Toggle; end);
   LPalette.AddCommand('Devbox / Pomodoro: começar ou pausar', procedure begin FPomodoro.Toggle; end);
+  LPalette.AddCommand('Devbox / Janela mini (sempre por cima)', procedure begin FIssuesPage.ToggleMini; end);
   LPalette.AddCommand('Devbox / Resumo do meu dia (assistente)',
     procedure
     begin
@@ -873,6 +973,8 @@ begin
         FTray.Hint := 'Devbox  ·  ' + AText
       else
         FocusChanged(nil);  // volta a dica normal
+      FPomodoroText := AText;
+      UpdateMiniStatus;
     end;
   Result.OnWorkStart :=
     procedure(AMinutes: Integer)
@@ -898,6 +1000,7 @@ end;
 procedure TMainForm.ShowNotify(const ATitle, AText: string; AError: Boolean);
 begin
   FBalloonPage := '';
+  FBalloonExplain := False;
   FTray.BalloonTitle := ATitle;
   FTray.BalloonHint := AText;
   if AError then
@@ -913,10 +1016,76 @@ end;
 
 procedure TMainForm.TrayBalloonClick(Sender: TObject);
 begin
+  if FBalloonExplain then
+  begin
+    ExplainClick(nil);
+    Exit;
+  end;
   if FBalloonPage = '' then
     Exit;
   ShowPage(FBalloonPage);
   ShowWindow_;
+end;
+
+{ Erro copiado: na janela, aviso com "Explicar"; com ela escondida, balão da bandeja.
+  No máximo um convite por minuto, para não insistir enquanto a pessoa copia o log. }
+procedure TMainForm.OfferExplain(const AText: string);
+const
+  CCooldownMs = 60000;
+begin
+  if (FExplainOfferedAt <> 0) and (GetTickCount64 - FExplainOfferedAt < CCooldownMs) then
+    Exit;
+  FExplainOfferedAt := GetTickCount64;
+  FExplainText := AText;
+  if Visible and not IsIconic(Handle) then
+    TUIToastManager.Show('Parece um erro. Quer a explicação do assistente?', ttInfo, 8000, 'Explicar', ExplainClick)
+  else
+  begin
+    ShowNotify('Erro copiado', 'Clique para o assistente explicar.', False);
+    FBalloonExplain := True;
+  end;
+end;
+
+procedure TMainForm.ExplainClick(Sender: TObject);
+const
+  CMaxChars = 6000;
+begin
+  FBalloonExplain := False;
+  ShowWindow_;
+  AskAssistant('Explique este erro que copiei. Diga a causa provável, onde olhar e como corrigir. Seja curto.' +
+    sLineBreak + sLineBreak + '```' + sLineBreak + HideSecrets(Copy(FExplainText, 1, CMaxChars)) + sLineBreak + '```');
+end;
+
+procedure TMainForm.MiniMenuClick(Sender: TObject);
+begin
+  FIssuesPage.ToggleMini;
+  UpdateMiniStatus;
+end;
+
+{ Linha da janela mini: Pomodoro e a reunião de agora ou a próxima de hoje. }
+procedure TMainForm.UpdateMiniStatus;
+var
+  LParts: TArray<string>;
+  LEvent, LNext: TCalEvent;
+  LFound: Boolean;
+begin
+  if not FIssuesPage.MiniVisible then
+    Exit;
+  LParts := nil;
+  if FPomodoroText <> '' then
+    LParts := [FPomodoroText];
+  LFound := False;
+  for LEvent in FAgendaPage.TodayEvents do
+    if not LEvent.AllDay and (LEvent.Finish > Now) and (not LFound or (LEvent.Start < LNext.Start)) then
+    begin
+      LNext := LEvent;
+      LFound := True;
+    end;
+  if LFound and (LNext.Start <= Now) then
+    LParts := LParts + ['Agora: ' + LNext.Title]
+  else if LFound then
+    LParts := LParts + ['Próxima ' + FormatDateTime('hh:nn', LNext.Start) + ' ' + LNext.Title];
+  FIssuesPage.SetMiniStatus(string.Join('  ·  ', LParts));
 end;
 
 procedure TMainForm.HealthTick(Sender: TObject);
@@ -925,6 +1094,7 @@ var
   LHour: Integer;
   LKey: string;
 begin
+  UpdateMiniStatus;
   if FHealthRunning or (Store.GetSetting('health_on', '1') <> '1') then
     Exit;
   LSchedule := THealthSchedule(EnsureRange(StrToIntDef(Store.GetSetting('health_schedule', '0'), 0), 0,
@@ -1237,13 +1407,651 @@ begin
     end);
 end;
 
+function FindEnv(const AName: string; out AEnv: TEnv): Boolean;
+var
+  LEnv: TEnv;
+begin
+  for LEnv in Store.ListEnvs do
+    if SameText(LEnv.Name, AName) then
+    begin
+      AEnv := LEnv;
+      Exit(True);
+    end;
+  Result := False;
+end;
+
+function FindJob(const AName: string; out AJob: TJob): Boolean;
+var
+  LJob: TJob;
+begin
+  for LJob in Store.ListJobs do
+    if SameText(LJob.Name, AName) then
+    begin
+      AJob := LJob;
+      Exit(True);
+    end;
+  Result := False;
+end;
+
+{ O que se faz à mão no Devbox, o assistente faz também: telas, foco, pomodoro, ambientes,
+  agendador, avisos de fim, snippets, monitor de URL, limpeza e WSL. O que muda algo fora do
+  Devbox (roda comando, liga containers, agenda tarefa) pede confirmação. }
+procedure TMainForm.RegisterAppTools;
+const
+  CCleanupTimeoutMs = 600000;
+  CCleanupTabs: array[0..5] of string = ('lixo_build', 'temporarios', 'arquivos_grandes', 'pastas_vazias',
+    'containers', 'inicializacao');
+var
+  LTools: TUIAssistantToolRegistry;
+  LDef: TUIAssistantToolDef;
+  LPages: string;
+  LId: string;
+
+begin
+  LTools := FIssuesPage.Assistant.Tools;
+  LPages := '';
+  for LId in FPageOrder do
+    LPages := LPages + IfThen(LPages <> '', ', ') + LId;
+
+  LDef := LTools.Register('devbox_abrir_tela', 'Abre uma tela do Devbox: ' + LPages + ', clipboard, expander.',
+    function(const AArgs: TJSONObject): string
+    begin
+      if not PageExists(AArgs.GetValue<string>('tela', '')) then
+        Exit('Tela desconhecida. Use uma destas: ' + LPages);
+      ShowPage(AArgs.GetValue<string>('tela', ''));
+      Result := 'Aberta.';
+    end);
+  LDef.AddParam('tela', pkString, 'Id da tela', True);
+
+  LDef := LTools.Register('devbox_foco', 'Liga ou desliga o modo foco (pausa o clipboard e guarda os avisos).',
+    function(const AArgs: TJSONObject): string
+    begin
+      if AArgs.GetValue<Boolean>('ligar', True) <> FocusActive then
+        FFocusPage.Toggle;
+      Result := IfThen(FocusActive, 'Foco ligado.', 'Foco desligado.');
+    end);
+  LDef.AddParam('ligar', pkBoolean, 'true liga, false desliga', True);
+
+  LTools.Register('devbox_pomodoro', 'Começa ou pausa o Pomodoro (trabalho e pausa em ciclos).',
+    function(const AArgs: TJSONObject): string
+    begin
+      FPomodoro.Toggle;
+      Result := 'Pomodoro alternado (começou ou pausou).';
+    end);
+
+  LTools.Register('devbox_ambientes', 'Lista os ambientes de projeto e os passos de cada um.',
+    function(const AArgs: TJSONObject): string
+    var
+      LEnv: TEnv;
+    begin
+      Result := '';
+      for LEnv in Store.ListEnvs do
+        Result := Result + '## ' + LEnv.Name + sLineBreak + LEnv.Script + sLineBreak;
+      if Result = '' then
+        Result := 'Nenhum ambiente.';
+    end);
+
+  LDef := LTools.Register('devbox_ambiente_criar',
+    'Cria ou troca um ambiente de projeto. Passos, um por linha: "distro: Ubuntu", "container: nome @Distro", ' +
+    '"esperar: localhost:5432" ou "esperar: 5", "terminal: C:\pasta | comando", "editor: C:\pasta", ' +
+    '"abrir: http://localhost:3000". Linha com # é comentário.',
+    function(const AArgs: TJSONObject): string
+    var
+      LEnv: TEnv;
+    begin
+      if not FindEnv(AArgs.GetValue<string>('nome', ''), LEnv) then
+        LEnv := Default(TEnv);
+      LEnv.Name := AArgs.GetValue<string>('nome', '');
+      LEnv.Script := AArgs.GetValue<string>('passos', '').Replace(#10, sLineBreak);
+      Store.SaveEnv(LEnv);
+      FEnvsPage.Reload;
+      Result := 'Ambiente salvo: ' + LEnv.Name;
+    end);
+  LDef.AddParam('nome', pkString, 'Nome do ambiente', True);
+  LDef.AddParam('passos', pkString, 'Passos, um por linha', True);
+
+  LDef := LTools.Register('devbox_ambiente_ligar', 'Liga (ou desliga) um ambiente de projeto: sobe distro, ' +
+    'containers, terminal, editor e navegador.',
+    function(const AArgs: TJSONObject): string
+    var
+      LEnv: TEnv;
+    begin
+      if not FindEnv(AArgs.GetValue<string>('nome', ''), LEnv) then
+        Exit('Ambiente não encontrado.');
+      ShowPage('envs');
+      FEnvsPage.Run(LEnv, AArgs.GetValue<Boolean>('desligar', False));
+      Result := 'Rodando os passos de ' + LEnv.Name + '; o resultado aparece na tela Ambientes e num aviso.';
+    end, True);
+  LDef.AddParam('nome', pkString, 'Nome do ambiente', True);
+  LDef.AddParam('desligar', pkBoolean, 'true para desligar', False);
+
+  LTools.Register('devbox_tarefas', 'Lista as tarefas do agendador (quando rodam, ligadas, último resultado).',
+    function(const AArgs: TJSONObject): string
+    var
+      LJob: TJob;
+    begin
+      Result := '';
+      for LJob in Store.ListJobs do
+        Result := Result + Format('- %s: %s, %s, %s, comando: %s', [LJob.Name, LJob.WhenText,
+          IfThen(LJob.Enabled, 'ligada', 'desligada'), IfThen(LJob.LastExit < 0, 'nunca rodou',
+          'última saída ' + IntToStr(LJob.LastExit)), LJob.Command]) + sLineBreak;
+      if Result = '' then
+        Result := 'Nenhuma tarefa.';
+    end);
+
+  LDef := LTools.Register('devbox_tarefa_criar', 'Cria uma rotina no agendador: roda um comando (cmd.exe /c) ou ' +
+    'só lembra (lembrete) a cada N minutos, todo dia ou em dias da semana num horário. Use para pedidos como ' +
+    '"toda sexta às 17h me lembra de lançar horas" ou "todo dia às 9h limpa o lixo de build".',
+    function(const AArgs: TJSONObject): string
+    var
+      LJob: TJob;
+      LTime, LDays, LDay: string;
+      LHour, LMin, I: Integer;
+    begin
+      LJob := Default(TJob);
+      LJob.Name := AArgs.GetValue<string>('nome', '');
+      LJob.Command := AArgs.GetValue<string>('comando', '');
+      // Lembrete: o "comando" só ecoa a mensagem e o aviso sai mesmo dando certo.
+      if AArgs.GetValue<string>('lembrete', '') <> '' then
+      begin
+        LJob.Command := 'echo ' + AArgs.GetValue<string>('lembrete', '');
+        LJob.NotifyOk := True;
+      end;
+      if LJob.Command = '' then
+        Exit('Faltou o comando ou o lembrete.');
+      LJob.WorkDir := AArgs.GetValue<string>('pasta', '');
+      LJob.Enabled := True;
+      LJob.LastExit := -1;
+      LJob.Weekdays := $7F;
+      LTime := AArgs.GetValue<string>('as', AArgs.GetValue<string>('todo_dia_as', ''));
+      LDays := AArgs.GetValue<string>('dias_semana', '');
+      if (LTime <> '') and TryStrToInt(Copy(LTime, 1, 2), LHour) and TryStrToInt(Copy(LTime, 4, 2), LMin) then
+      begin
+        LJob.Kind := jkDaily;
+        LJob.AtMin := LHour * 60 + LMin;
+        if LDays <> '' then
+        begin
+          LJob.Kind := jkWeekly;
+          LJob.Weekdays := 0;
+          for LDay in LDays.Split([',', ' ', ';'], TStringSplitOptions.ExcludeEmpty) do
+            for I := 0 to 6 do
+              // "sexta", "sex", "sábado", "sabado": basta começar pelo nome curto.
+              if StartsText(StringReplace(WeekdayNames[I], 'á', 'a', []), StringReplace(LDay, 'á', 'a', [])) then
+                LJob.Weekdays := LJob.Weekdays or (1 shl I);
+          if LJob.Weekdays = 0 then
+            Exit('Não entendi os dias. Use dom, seg, ter, qua, qui, sex, sáb.');
+        end;
+      end
+      else
+      begin
+        LJob.Kind := jkInterval;
+        LJob.EveryMin := Max(1, AArgs.GetValue<Integer>('a_cada_minutos', 60));
+      end;
+      LJob.NextRun := NextRunAfter(LJob, Now);
+      Store.SaveJob(LJob);
+      FJobsPage.Reload;
+      Result := Format('Tarefa criada: %s, %s.', [LJob.Name, LJob.WhenText]);
+    end, True);
+  LDef.AddParam('nome', pkString, 'Nome da tarefa', True);
+  LDef.AddParam('comando', pkString, 'Comando (roda com cmd.exe /c). Vazio se for lembrete.', False);
+  LDef.AddParam('lembrete', pkString, 'Mensagem do lembrete (em vez do comando)', False);
+  LDef.AddParam('pasta', pkString, 'Pasta onde roda', False);
+  LDef.AddParam('a_cada_minutos', pkInteger, 'Intervalo em minutos (quando não tem horário)', False);
+  LDef.AddParam('as', pkString, 'Horário hh:mm (todo dia, ou nos dias da semana)', False);
+  LDef.AddParam('dias_semana', pkString, 'Dias, ex.: "seg,qua,sex" (com o horário)', False);
+
+  LDef := LTools.Register('devbox_tarefa_rodar', 'Roda agora uma tarefa do agendador.',
+    function(const AArgs: TJSONObject): string
+    var
+      LJob: TJob;
+    begin
+      if not FindJob(AArgs.GetValue<string>('nome', ''), LJob) then
+        Exit('Tarefa não encontrada.');
+      FJobsPage.RunJob(LJob);
+      Result := 'Rodando ' + LJob.Name + '; o resultado aparece no Agendador e num aviso.';
+    end, True);
+  LDef.AddParam('nome', pkString, 'Nome da tarefa', True);
+
+  LDef := LTools.Register('devbox_tarefa_ligar', 'Liga ou desliga uma tarefa do agendador.',
+    function(const AArgs: TJSONObject): string
+    var
+      LJob: TJob;
+    begin
+      if not FindJob(AArgs.GetValue<string>('nome', ''), LJob) then
+        Exit('Tarefa não encontrada.');
+      LJob.Enabled := AArgs.GetValue<Boolean>('ligar', True);
+      LJob.NextRun := NextRunAfter(LJob, Now);
+      Store.SaveJob(LJob);
+      FJobsPage.Reload;
+      Result := LJob.Name + IfThen(LJob.Enabled, ' ligada.', ' desligada.');
+    end);
+  LDef.AddParam('nome', pkString, 'Nome da tarefa', True);
+  LDef.AddParam('ligar', pkBoolean, 'true liga, false desliga', True);
+
+  LDef := LTools.Register('devbox_aviso_fim', 'Avisa na bandeja quando um processo termina ou uma porta fecha.',
+    function(const AArgs: TJSONObject): string
+    var
+      LTarget: string;
+    begin
+      LTarget := AArgs.GetValue<string>('alvo', '');
+      if SameText(AArgs.GetValue<string>('tipo', 'processo'), 'porta') then
+        FWatchesPage.AddWatch(wkPort, LTarget, '', 'Porta ' + LTarget)
+      else
+        FWatchesPage.AddWatch(wkProcess, LTarget, '', 'Processo ' + LTarget);
+      Result := 'Aviso criado para ' + LTarget + '.';
+    end);
+  LDef.AddParam('tipo', pkString, 'processo ou porta', True);
+  LDef.AddParam('alvo', pkString, 'Nome do processo (ou pid:123) ou número da porta', True);
+
+  LDef := LTools.Register('devbox_snippet_criar', 'Cria um snippet do expansor: digitar o atalho (ex.: ;sql) em ' +
+    'qualquer programa vira o texto. Campos {{nome}} são perguntados antes de colar.',
+    function(const AArgs: TJSONObject): string
+    var
+      LAbbrev: string;
+    begin
+      LAbbrev := AArgs.GetValue<string>('atalho', '');
+      if not LAbbrev.StartsWith(';') then
+        LAbbrev := ';' + LAbbrev;
+      Store.SaveSnippet(0, AArgs.GetValue<string>('texto', '').Replace(#10, sLineBreak), LAbbrev);
+      ExpanderChanged(nil);
+      FExpanderPage.Reload;
+      Result := 'Snippet ' + LAbbrev + ' criado.';
+    end);
+  LDef.AddParam('atalho', pkString, 'Atalho, ex.: ;sql', True);
+  LDef.AddParam('texto', pkString, 'Texto que entra no lugar do atalho', True);
+
+  LDef := LTools.Register('devbox_url_monitorar', 'Monitora uma URL: avisa quando cai ou volta e quando o ' +
+    'certificado vai vencer.',
+    function(const AArgs: TJSONObject): string
+    var
+      LCheck: TUrlCheck;
+    begin
+      LCheck := Default(TUrlCheck);
+      LCheck.Name := AArgs.GetValue<string>('nome', '');
+      LCheck.Url := AArgs.GetValue<string>('url', '');
+      LCheck.IntervalSec := Max(30, AArgs.GetValue<Integer>('intervalo_segundos', 60));
+      LCheck.Enabled := True;
+      Store.SaveUrlCheck(LCheck);
+      FNetworkPage.ReloadUrls;
+      Result := 'Monitorando ' + LCheck.Url + '.';
+    end);
+  LDef.AddParam('nome', pkString, 'Nome', True);
+  LDef.AddParam('url', pkString, 'Endereço', True);
+  LDef.AddParam('intervalo_segundos', pkInteger, 'De quanto em quanto tempo (padrão 60)', False);
+
+  LDef := LTools.Register('devbox_limpeza_analisar', 'Analisa uma aba da Limpeza e devolve o que achou (só lê; ' +
+    'apagar é o usuário quem faz, na tela). Abas: ' + string.Join(', ', CCleanupTabs) + '.',
+    function(const AArgs: TJSONObject): string
+    var
+      LTab: Integer;
+    begin
+      LTab := IndexText(AArgs.GetValue<string>('aba', 'temporarios'), CCleanupTabs);
+      if LTab < 0 then
+        Exit('Aba desconhecida.');
+      ShowPage('cleanup');
+      FCleanupPage.AnalyzeTab(LTab);
+      WaitUntil(
+        function: Boolean
+        begin
+          Result := not FCleanupPage.Busy;
+        end, CCleanupTimeoutMs);
+      Result := FCleanupPage.PageContext;
+    end);
+  LDef.AddParam('aba', pkString, 'Uma das abas', True);
+
+  LDef := LTools.Register('devbox_wsl', 'WSL: listar as distros (com o tamanho do disco), desligar tudo ou ' +
+    'liberar a memória das distros ligadas.',
+    function(const AArgs: TJSONObject): string
+    var
+      LAction, LError: string;
+      LDistro: TWslDistro;
+    begin
+      LAction := AArgs.GetValue<string>('acao', 'listar');
+      if SameText(LAction, 'desligar') then
+        Exit(IfThen(WslShutdown(LError), 'WSL desligado.', 'Não deu: ' + LError));
+      if SameText(LAction, 'liberar_memoria') then
+        Exit(WslRunAsRootInRunning('sync; echo 3 > /proc/sys/vm/drop_caches'));
+      Result := '';
+      for LDistro in ListWslDistros do
+        Result := Result + Format('- %s: %s, disco %s', [LDistro.Name, IfThen(LDistro.Running, 'ligada',
+          'desligada'), SizeText(LDistro.VhdxSize)]) + sLineBreak;
+    end, True);
+  LDef.AddParam('acao', pkString, 'listar, desligar ou liberar_memoria', True);
+
+  LTools.Register('devbox_git', 'Repositórios Git locais: branch, arquivos sem commit e o que falta enviar ou ' +
+    'puxar. Responde "o que ficou sem commit?".',
+    function(const AArgs: TJSONObject): string
+    begin
+      ShowPage('git');
+      WaitUntil(
+        function: Boolean
+        begin
+          Result := not FGitPage.Busy;
+        end, 120000);
+      Result := FGitPage.ReposText;
+    end);
+
+  LDef := LTools.Register('devbox_git_diff', 'Diff de um repositório (o stage; sem stage, tudo que mudou) para ' +
+    'escrever a mensagem de commit ou a descrição do PR. Só lê.',
+    function(const AArgs: TJSONObject): string
+    var
+      LRepo: TGitRepo;
+    begin
+      if not FGitPage.RepoByName(AArgs.GetValue<string>('repositorio', ''), LRepo) then
+        Exit('Repositório não encontrado. Use devbox_git para ver os nomes.');
+      Result := HideSecrets(GitDiffText(LRepo.Path));
+    end);
+  LDef.AddParam('repositorio', pkString, 'Nome ou pasta do repositório', True);
+
+  LDef := LTools.Register('devbox_email_buscar', 'Busca e-mails carregados por assunto, remetente ou trecho. ' +
+    'Vazio: os não lidos. Devolve id, remetente, assunto e trecho.',
+    function(const AArgs: TJSONObject): string
+    const
+      CMax = 15;
+    var
+      LMsgs: TMailMsgs;
+      LMsg: TMailMsg;
+    begin
+      if Trim(AArgs.GetValue<string>('texto', '')) = '' then
+        LMsgs := Copy(FMailPage.UnreadMails, 0, CMax)
+      else
+        LMsgs := FMailPage.SearchMails(Trim(AArgs.GetValue<string>('texto', '')), CMax);
+      Result := '';
+      for LMsg in LMsgs do
+        Result := Result + Format('- id %s | %s <%s> | %s | %s', [LMsg.Id, LMsg.FromName, LMsg.FromEmail,
+          LMsg.Subject, LMsg.Snippet]) + sLineBreak;
+      if Result = '' then
+        Result := 'Nenhum e-mail encontrado.';
+    end);
+  LDef.AddParam('texto', pkString, 'O que buscar (vazio = não lidos)', False);
+
+  LDef := LTools.Register('devbox_email_ler', 'Lê o e-mail inteiro pelo id (para entender o pedido antes de ' +
+    'responder).',
+    function(const AArgs: TJSONObject): string
+    var
+      LMsg: TMailMsg;
+      LAccount, LSel: TMailAccount;
+      LFound, LDone: Boolean;
+      LError: string;
+    begin
+      if not FMailPage.FindMail(AArgs.GetValue<string>('id', ''), LMsg) then
+        Exit('E-mail não encontrado. Use devbox_email_buscar.');
+      if LMsg.Body = '' then
+      begin
+        LFound := False;
+        for LAccount in LoadMailAccounts do
+          if SameText(LAccount.Email, LMsg.Account) then
+          begin
+            LSel := LAccount;
+            LFound := True;
+          end;
+        if LFound then
+        begin
+          LDone := False;
+          RunTask(
+            procedure
+            begin
+              SrcGetMail(LSel, LMsg.Id, LMsg, LError);
+              LDone := True;
+            end);
+          WaitUntil(
+            function: Boolean
+            begin
+              Result := LDone;
+            end, 30000);
+        end;
+      end;
+      Result := HideSecrets(Format('De: %s <%s>%sAssunto: %s%sData: %s%s%s', [LMsg.FromName, LMsg.FromEmail,
+        sLineBreak, LMsg.Subject, sLineBreak, FormatDateTime('dd/mm/yyyy hh:nn', LMsg.Date), sLineBreak + sLineBreak,
+        Copy(IfThen(LMsg.Body <> '', LMsg.Body, LMsg.Snippet), 1, 8000)]));
+    end);
+  LDef.AddParam('id', pkString, 'Id do e-mail', True);
+
+  LDef := LTools.Register('devbox_email_rascunho', 'Cria o rascunho da resposta (não envia). Gmail: fica nos ' +
+    'Rascunhos, na conversa. Conta IMAP: o texto vai para o clipboard.',
+    function(const AArgs: TJSONObject): string
+    var
+      LMsg: TMailMsg;
+      LAccount: TMailAccount;
+      LIsGmail, LDone, LOk: Boolean;
+      LText, LError: string;
+    begin
+      if not FMailPage.FindMail(AArgs.GetValue<string>('id', ''), LMsg) then
+        Exit('E-mail não encontrado. Use devbox_email_buscar.');
+      LText := AArgs.GetValue<string>('texto', '');
+      LIsGmail := False;
+      for LAccount in LoadMailAccounts do
+        if SameText(LAccount.Email, LMsg.Account) then
+          LIsGmail := not LAccount.IsImap;
+      if not LIsGmail then
+      begin
+        Clipboard.AsText := LText;
+        Exit('Conta IMAP: o rascunho foi para o clipboard. Cole no seu programa de e-mail.');
+      end;
+      LDone := False;
+      LOk := False;
+      RunTask(
+        procedure
+        begin
+          LOk := CreateReplyDraft(LMsg.Account, LMsg.ThreadId, LMsg.FromEmail, LMsg.Subject, LText, LError);
+          LDone := True;
+        end);
+      WaitUntil(
+        function: Boolean
+        begin
+          Result := LDone;
+        end, 30000);
+      Result := IfThen(LOk, 'Rascunho criado nos Rascunhos do Gmail, na conversa. Revise e envie de lá.',
+        'Não deu para criar o rascunho: ' + LError);
+    end, True);
+  LDef.AddParam('id', pkString, 'Id do e-mail', True);
+  LDef.AddParam('texto', pkString, 'Texto da resposta', True);
+end;
+
+type
+  { Um grupo do Ctrl+K a partir de uma função: clipboard, e-mail, ambientes. }
+  TFuncSearchProvider = class(TInterfacedObject, IUICommandSearchProvider)
+  private
+    FName, FIcon: string;
+    FSearch: TFunc<string, Integer, TUISearchHits>;
+  public
+    constructor Create(const AName, AIcon: string; const ASearch: TFunc<string, Integer, TUISearchHits>);
+    function GroupName: string;
+    function GroupIconSvg: string;
+    function Search(const AQuery: string; AMaxResults: Integer): TUISearchHits;
+  end;
+
+constructor TFuncSearchProvider.Create(const AName, AIcon: string;
+  const ASearch: TFunc<string, Integer, TUISearchHits>);
+begin
+  inherited Create;
+  FName := AName;
+  FIcon := AIcon;
+  FSearch := ASearch;
+end;
+
+function TFuncSearchProvider.GroupName: string;
+begin
+  Result := FName;
+end;
+
+function TFuncSearchProvider.GroupIconSvg: string;
+begin
+  Result := FIcon;
+end;
+
+function TFuncSearchProvider.Search(const AQuery: string; AMaxResults: Integer): TUISearchHits;
+const
+  CMinChars = 2;
+begin
+  if Length(Trim(AQuery)) < CMinChars then
+    Exit(nil);
+  Result := FSearch(Trim(AQuery), AMaxResults);
+end;
+
+function SearchHit(const AId, ATitle, ASubtitle, AIcon: string; const AAction: TProc): TUISearchHit;
+begin
+  Result := Default(TUISearchHit);
+  Result.ID := AId;
+  Result.Title := ATitle;
+  Result.Subtitle := ASubtitle;
+  Result.IconSvg := AIcon;
+  Result.Action := AAction;
+  Result.Score := 100;
+end;
+
+const
+  CMemoryKey = 'assistant_memory';
+  CMaxMemories = 30;
+  CMaxMemoryChars = 300;
+
+function Memories: TArray<string>;
+begin
+  Result := Store.GetSetting(CMemoryKey, '').Split([#10], TStringSplitOptions.ExcludeEmpty);
+end;
+
+{ O que o usuário ensinou ao assistente ("meu projeto principal é X"): vai no começo do
+  contexto de toda conversa. }
+function MemoryContext: string;
+var
+  LItems: TArray<string>;
+  I: Integer;
+begin
+  LItems := Memories;
+  if LItems = nil then
+    Exit('');
+  Result := 'O que o usuário pediu para você lembrar (use sem perguntar de novo):' + sLineBreak;
+  for I := 0 to High(LItems) do
+    Result := Result + Format('%d. %s', [I + 1, LItems[I]]) + sLineBreak;
+  Result := Result + sLineBreak;
+end;
+
+procedure TMainForm.RegisterMemoryTools;
+var
+  LDef: TUIAssistantToolDef;
+begin
+  LDef := FIssuesPage.Assistant.Tools.Register('devbox_lembrar', 'Guarda um fato que o usuário quer que você ' +
+    'lembre nas próximas conversas ("meu projeto principal é X", "lanço horas na PROJ-7"). Use quando ele ' +
+    'pedir para lembrar ou disser uma preferência duradoura.',
+    function(const AArgs: TJSONObject): string
+    var
+      LItems: TArray<string>;
+      LText: string;
+    begin
+      LText := Copy(Trim(AArgs.GetValue<string>('fato', '').Replace(#13, ' ').Replace(#10, ' ')), 1,
+        CMaxMemoryChars);
+      if LText = '' then
+        Exit('Faltou o fato.');
+      LItems := Memories;
+      if Length(LItems) >= CMaxMemories then
+        Exit(Format('Já guardo %d coisas. Peça para esquecer alguma antes.', [CMaxMemories]));
+      Store.SetSetting(CMemoryKey, string.Join(#10, LItems + [LText]));
+      Result := 'Guardado.';
+    end);
+  LDef.AddParam('fato', pkString, 'O que lembrar, numa frase', True);
+
+  LDef := FIssuesPage.Assistant.Tools.Register('devbox_esquecer', 'Apaga um item da memória pelo número ' +
+    '(a lista numerada vem no começo do contexto).',
+    function(const AArgs: TJSONObject): string
+    var
+      LItems: TArray<string>;
+      LIndex: Integer;
+    begin
+      LItems := Memories;
+      LIndex := AArgs.GetValue<Integer>('numero', 0) - 1;
+      if (LIndex < 0) or (LIndex > High(LItems)) then
+        Exit('Número fora da lista.');
+      Delete(LItems, LIndex, 1);
+      Store.SetSetting(CMemoryKey, string.Join(#10, LItems));
+      Result := 'Esquecido.';
+    end);
+  LDef.AddParam('numero', pkInteger, 'Número do item', True);
+end;
+
+{ Ctrl+K busca também no conteúdo: clipboard e snippets, e-mails carregados e ambientes. }
+procedure TMainForm.RegisterSearch;
+begin
+  FIssuesPage.AddSearchProvider(TFuncSearchProvider.Create('Clipboard e snippets', LineIcon(IconClipboard),
+    function(AQuery: string; AMax: Integer): TUISearchHits
+    var
+      LClip: TClip;
+    begin
+      Result := nil;
+      for LClip in Store.ListClips do
+        if (LClip.Kind <> ckImage) and (ContainsText(LClip.Text, AQuery) or ContainsText(LClip.Abbrev, AQuery)) then
+        begin
+          Result := Result + [SearchHit('clip:' + IntToStr(LClip.Id), LClip.Title,
+            IfThen(LClip.Pinned, 'Snippet ' + LClip.Abbrev, 'Copiado em ' + FormatDateTime('dd/mm hh:nn',
+            LClip.CreatedAt)) + ' · Enter copia', LineIcon(IconClipboard),
+            CopyClipProc(LClip.Text))];
+          if Length(Result) >= AMax then
+            Exit;
+        end;
+    end));
+  FIssuesPage.AddSearchProvider(TFuncSearchProvider.Create('E-mail', LineIcon(IconMail),
+    function(AQuery: string; AMax: Integer): TUISearchHits
+    var
+      LMsg: TMailMsg;
+    begin
+      Result := nil;
+      for LMsg in FMailPage.SearchMails(AQuery, AMax) do
+        Result := Result + [SearchHit('mail:' + LMsg.Id, LMsg.Subject, LMsg.FromName + ' · ' +
+          FormatDateTime('dd/mm hh:nn', LMsg.Date), LineIcon(IconMail), OpenMailProc(LMsg.Id))];
+    end));
+  FIssuesPage.AddSearchProvider(TFuncSearchProvider.Create('Ambientes', LineIcon(IconPlay),
+    function(AQuery: string; AMax: Integer): TUISearchHits
+    var
+      LEnv: TEnv;
+    begin
+      Result := nil;
+      for LEnv in Store.ListEnvs do
+        if ContainsText(LEnv.Name, AQuery) then
+          Result := Result + [SearchHit('env:' + IntToStr(LEnv.Id), 'Ligar ' + LEnv.Name, 'Ambiente de projeto',
+            LineIcon(IconPlay), RunEnvProc(LEnv.Name))];
+    end));
+end;
+
+{ Cada uma num método próprio: a ação guarda o valor da volta do laço, não a variável. }
+function TMainForm.CopyClipProc(const AText: string): TProc;
+begin
+  Result :=
+    procedure
+    begin
+      Clipboard.AsText := AText;
+      TUIToastManager.Show('Copiado', ttSuccess, 2000);
+    end;
+end;
+
+function TMainForm.OpenMailProc(const AId: string): TProc;
+begin
+  Result :=
+    procedure
+    begin
+      ShowPage('mail');
+      FMailPage.OpenMessage(AId);
+    end;
+end;
+
+function TMainForm.RunEnvProc(const AName: string): TProc;
+begin
+  Result :=
+    procedure
+    var
+      LEnv: TEnv;
+    begin
+      ShowPage('envs');
+      if FindEnv(AName, LEnv) then
+        FEnvsPage.Run(LEnv, False);
+    end;
+end;
+
 function TMainForm.ScreenContext: string;
 begin
   if FActive = nil then
     Exit('');
   Result := 'Tela aberta no Devbox: ' + FActive.Caption + '.';
   if FActive.PageContext <> '' then
-    Result := Result + sLineBreak + FActive.PageContext;
+    Result := Result + sLineBreak + HideSecrets(FActive.PageContext);
 end;
 
 { O que antes eram botões de IA nas telas (Clipboard, logs, Comando por IA) o assistente faz:

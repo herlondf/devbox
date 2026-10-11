@@ -25,11 +25,13 @@
 - **Imagem e arquivos copiados:** OCR (texto da imagem pelo próprio Windows), salvar PNG, SHA-256 e zip dos arquivos.
 - **Expansor de texto:** `;atalho` em qualquer programa vira o snippet. Campos `{{nome}}` são perguntados antes de colar. Já vem com `;data`, `;hora`, `;agora`, `;guid` e `;ts`.
 - **Foco e reunião:** clipboard em pausa e avisos guardados para o fim. Liga por 25 ou 50 minutos, até você desligar, ou sozinho quando a câmera ou o microfone estão em uso. Mostra o tempo de foco por dia.
+- **Busca (Ctrl+K):** telas, comandos, issues e também o conteúdo: clipboard, snippets, e-mails e ambientes.
+- **Git:** seus repositórios com branch, o que falta commitar e o que falta enviar ou puxar. O assistente escreve a mensagem de commit e o PR a partir do diff.
 - **Ferramentas:** captura de tela para bug (seta, retângulo, texto, número de passo e borrar), comparar `.env` com `.env.example` e log ao vivo com erro em vermelho.
 
 **E-mail e agenda**
 - **E-mail:** caixa de entrada das suas contas numa lista só, com cor por conta. Gmail pelo login do Google; Yahoo, iCloud e IMAP de empresa com senha de app. Aviso na hora para e-mail importante não lido.
-- **Organizar com IA:** a IA lê os e-mails e sugere rótulo (pasta, no IMAP), arquivar ou marcar como lido. Nada muda sem você clicar em Aplicar.
+- **E-mail pelo assistente:** organizar a caixa (rótulo, arquivar, marcar lido, só depois que você aprova) e rascunho de resposta. No Gmail o rascunho fica nos Rascunhos; nada é enviado.
 - **Agenda:** dia, semana, mês ou lista da agenda principal. Aviso antes de cada reunião e um botão para entrar no Meet. Também aceita agenda por link iCal (sem login), de qualquer serviço.
 - **Resumo do dia:** numa hora marcada, a IA junta a agenda de hoje e os e-mails importantes num texto curto.
 
@@ -39,6 +41,7 @@
 - A frase é conferida no próprio computador (Vosk). O pedido vira texto pelo motor que você escolher: whisper local (processador ou placa NVIDIA) ou nuvem (Groq ou OpenAI).
 
 **Ambiente**
+- **WSL:** distros com o tamanho do disco, padrão, desligar, backup e compactar o disco; editor do `.wslconfig` (memória, processadores, swap, rede); liberar memória, trim e atualizar.
 - **Serviços:** containers do Docker no Windows e do Podman ou Docker nas distros WSL ligadas, com iniciar, parar, reiniciar e logs. Distros WSL. Portas em escuta com o processo dono.
 - **Limpeza:** lixo de build de projetos parados (`node_modules`, `bin/obj`, `dcu`, `target`...), temporários e caches, arquivos grandes com gráfico por tipo, pastas vazias, imagens órfãs de container e programas que iniciam com o Windows.
 - **Rede:** monitor de URLs com tempo e vencimento do certificado, aviso de VPN e um receptor de webhook local para testar integrações.
@@ -46,7 +49,7 @@
 
 **Automação**
 - **Ambientes de projeto:** um roteiro de passos liga distro, containers, terminal, editor e navegador num clique.
-- **Comando por IA:** diga o que quer; a IA escreve o comando, você confere e decide se roda.
+- **Assistente (a coruja no canto):** faz o que você faz à mão: abre telas, liga foco e Pomodoro, cria e liga ambientes, cria rotinas ("toda sexta às 17h me lembra de lançar horas"), roda comando, analisa a limpeza e explica erro copiado. O que mexe fora do Devbox pede confirmação. Guarda o que você pede para lembrar.
 - **Agendador:** comandos a cada N minutos, todo dia ou em dias da semana, com histórico e aviso de falha.
 - **Avisos de fim:** avisa quando um processo termina, uma porta fecha ou um container para.
 
@@ -62,6 +65,8 @@
 | Win+Alt+B | Abre ou esconde a busca do clipboard |
 | Win+Alt+S | Captura de tela para bug |
 | ↑ ↓ e Enter | Escolhem e colam na janela de antes |
+| Ctrl+K | Busca e comandos |
+| J K, Enter, E, Del | Nas tabelas: andar, detalhe, editar, excluir |
 | Esc | Esconde a janela |
 
 Fechar a janela só esconde. Para sair, use **Sair** no menu da bandeja.
@@ -69,10 +74,10 @@ Fechar a janela só esconde. Para sair, use **Sair** no menu da bandeja.
 ## Privacidade e segurança
 
 - Tudo fica em `%LOCALAPPDATA%\Devbox\devbox.db` (SQLite), só na sua máquina.
-- Senha marcada pelo gerenciador de senhas e texto com cara de token ou chave não entram no histórico.
+- Senha marcada pelo gerenciador de senhas e texto com cara de token ou chave não entram no histórico e saem do clipboard em 30 s. No que vai para a IA, segredos viram `[segredo]`.
 - A chave da IA fica no Credential Manager do Windows. O texto só vai para a IA quando você clica.
 - O acesso às contas Google (refresh token), a senha de app do IMAP, os links iCal e a chave do cliente OAuth também ficam no Credential Manager. Organizar com IA e o resumo do dia mandam o texto inteiro dos e-mails para a IA que você configurou.
-- O que apaga ou encerra pede confirmação. Lixo de build sai de vez; arquivos grandes e pastas vazias vão para a Lixeira.
+- Excluir algo do Devbox tem "Desfazer". O que apaga arquivo ou encerra pede confirmação. Lixo de build sai de vez; arquivos grandes e pastas vazias vão para a Lixeira.
 - O expansor de texto e a captura de tela rodam num exe separado, `DevboxHelper.exe`, que o Devbox abre e fecha junto.
 
 ## IA

@@ -8,7 +8,7 @@ uses
   System.SysUtils;
 
 const
-  AppVersion = '0.5.0';
+  AppVersion = '0.6.0';
   // Segunda instância avisa a primeira por esta mensagem registrada.
   ShowMessageName = 'Devbox.Show';
   // Histórico que não é snippet some do mais velho para o mais novo depois disto.
@@ -85,6 +85,12 @@ function ClipCaption(const AClip: TClip): string;
 { Texto que parece segredo (token, chave privada, JWT, senha forte numa linha só).
   Não vai para o histórico. }
 function LooksSecret(const AText: string): Boolean;
+
+{ Cara de erro: pilha, exceção, "error:" de compilador, Traceback, ORA-, SQLSTATE. }
+function LooksLikeError(const AText: string): Boolean;
+
+{ Troca token, chave e senha por [segredo]. Para o que vai para a IA. }
+function HideSecrets(const AText: string): string;
 
 // Saída de "docker ps -a --format {{json .}}" ou do mesmo comando no podman:
 // um objeto JSON por linha. O podman manda Names e Ports como lista e Status vazio.
@@ -191,6 +197,32 @@ begin
   Result := SameText(State, 'running');
 end;
 
+const
+  CSecretTokens = '(^|[\s"''=:])(ghp_|gho_|ghu_|ghs_|github_pat_|glpat-|sk-ant-|sk-|sk_live_|rk_live_|' +
+    'xox[abpr]-|AIza[0-9A-Za-z_-]{20}|AKIA[0-9A-Z]{16})';
+  CSecretAssign = '(?i)(password|pwd|senha|passwd|secret|api[_-]?key|token|accountkey)\s*[=:]\s*[^\s;]+';
+
+function LooksLikeError(const AText: string): Boolean;
+const
+  CMinLen = 20;
+  CPatterns = '(?im)(Traceback \(most recent call last\)|^\s+at [\w.$<>]+\(|^\s+File ".+", line \d+|' +
+    '\b\w*(Exception|Error)\b\s*[:(]|\berror\s+(TS|CS|C|E)?\d+|\[dcc\w* (error|fatal)\]|^panic:|' +
+    '\bORA-\d{5}|\bSQLSTATE\b|\bsegmentation fault\b|\bFATAL\b|^error(\[\w+\])?:)';
+begin
+  Result := (Length(Trim(AText)) >= CMinLen) and TRegEx.IsMatch(AText, CPatterns);
+end;
+
+function HideSecrets(const AText: string): string;
+begin
+  Result := TRegEx.Replace(AText, '-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----',
+    '[segredo]');
+  Result := TRegEx.Replace(Result, '(ghp_|gho_|ghu_|ghs_|github_pat_|glpat-|sk-ant-|sk-|sk_live_|rk_live_|' +
+    'xox[abpr]-)[\w-]{6,}|AIza[0-9A-Za-z_-]{20,}|AKIA[0-9A-Z]{16}|eyJ[\w-]+\.eyJ[\w-]+\.[\w-]+', '[segredo]');
+  Result := TRegEx.Replace(Result, '(?i)((password|pwd|senha|passwd|secret|api[_-]?key|token|accountkey)' +
+    '\s*[=:]\s*)[^\s;]+', '$1[segredo]');
+  Result := TRegEx.Replace(Result, '(?i)(bearer\s+)[\w.-]{12,}', '$1[segredo]');
+end;
+
 function LooksSecret(const AText: string): Boolean;
 const
   CMinStrong = 12;
@@ -205,10 +237,8 @@ begin
   if S = '' then
     Exit(False);
   // Prefixos de token conhecidos e blocos de chave.
-  if TRegEx.IsMatch(S, '(^|\s)(ghp_|gho_|ghu_|ghs_|github_pat_|glpat-|sk-ant-|sk-|xox[abpr]-|AKIA[0-9A-Z]{16})') or
-    ContainsText(S, 'PRIVATE KEY-----') or
-    TRegEx.IsMatch(S, '^eyJ[\w-]+\.eyJ[\w-]+\.[\w-]+$') or
-    TRegEx.IsMatch(S, '(?i)(password|senha|passwd|secret|api[_-]?key)\s*[=:]\s*\S+') then
+  if TRegEx.IsMatch(S, CSecretTokens) or ContainsText(S, 'PRIVATE KEY-----') or
+    TRegEx.IsMatch(S, '^eyJ[\w-]+\.eyJ[\w-]+\.[\w-]+$') or TRegEx.IsMatch(S, CSecretAssign) then
     Exit(True);
   // Uma linha só, sem espaço, com maiúscula, minúscula, dígito e símbolo: cara de senha.
   if (Length(S) < CMinStrong) or (Length(S) > CMaxStrong) or (Pos(' ', S) > 0) or

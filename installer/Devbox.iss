@@ -31,6 +31,7 @@ OutputBaseFilename=Devbox-Setup-{#AppVersion}
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
+SetupIconFile=..\assets\devbox.ico
 UninstallDisplayIcon={app}\Devbox.exe
 UninstallDisplayName=Devbox
 CloseApplications=force

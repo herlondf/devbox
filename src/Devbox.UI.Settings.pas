@@ -17,14 +17,16 @@ type
   TSettingsPage = class(TDevPage)
   private
     FScroll: TUIScrollArea;
-    FClipToggle, FHotkeyToggle, FAutostartToggle, FHealthToggle: TUIToggle;
-    FLang, FUpdateMode, FHealthSchedule: TUISelect;
+    FClipToggle, FHotkeyToggle, FAutostartToggle, FHealthToggle, FSecretToggle, FExplainToggle: TUIToggle;
+    FLang, FUpdateMode, FHealthSchedule, FTheme, FDensity: TUISelect;
+    FOnLookChanged: TNotifyEvent;
     FOnHotkeyChanged: TNotifyEvent;
     FOnHistoryCleared: TNotifyEvent;
     FOnCheckUpdates: TNotifyEvent;
     FOnHealthNow: TNotifyEvent;
     procedure SettingToggle(Sender: TObject);
     procedure LangChange(Sender: TObject);
+    procedure LookChange(Sender: TObject);
     procedure UpdateModeChange(Sender: TObject);
     procedure HealthScheduleChange(Sender: TObject);
     procedure CheckUpdatesClick(Sender: TObject);
@@ -35,6 +37,8 @@ type
     constructor Create(AOwner: TComponent); override;
     procedure PageShown; override;
     property OnHotkeyChanged: TNotifyEvent read FOnHotkeyChanged write FOnHotkeyChanged;
+    { Tema ou densidade mudou (a janela principal aplica). }
+    property OnLookChanged: TNotifyEvent read FOnLookChanged write FOnLookChanged;
     property OnHistoryCleared: TNotifyEvent read FOnHistoryCleared write FOnHistoryCleared;
     { "Procurar agora" (a tela Issues tem o atualizador). }
     property OnCheckUpdates: TNotifyEvent read FOnCheckUpdates write FOnCheckUpdates;
@@ -102,15 +106,30 @@ begin
   FScroll.OnResize := ScrollResize;
   LBody := FScroll.InnerPanel;
 
-  LCard := NewSection(LBody, 'Clipboard', 3);
+  LCard := NewSection(LBody, 'Clipboard', 5);
   LHost := NewSettingRow(LCard, 'Guardar o que eu copio',
     Format('Os últimos %d itens ficam no histórico. Snippets ficam para sempre.', [HistoryLimit]), CToggleW);
   FClipToggle := Toggle(LHost, Store.GetSetting('clip_on', '1') = '1');
   LHost := NewSettingRow(LCard, 'Atalho Win+Alt+B',
     'Abre a busca do clipboard de qualquer programa. Enter cola onde você estava.', CToggleW);
   FHotkeyToggle := Toggle(LHost, Store.GetSetting('hotkey_on', '1') = '1');
+  LHost := NewSettingRow(LCard, 'Limpar senha copiada',
+    'Senha, token ou chave copiados saem do clipboard em 30 s. Nunca vão para o histórico.', CToggleW);
+  FSecretToggle := Toggle(LHost, Store.GetSetting('clip_secret_clear', '1') = '1');
+  LHost := NewSettingRow(LCard, 'Oferecer explicar erro',
+    'Copiou uma pilha de erro ou exceção? Um aviso oferece a explicação do assistente.', CToggleW);
+  FExplainToggle := Toggle(LHost, Store.GetSetting('clip_explain', '1') = '1');
   LHost := NewSettingRow(LCard, 'Histórico', 'Apaga o que foi copiado. Os snippets ficam.', CButtonW);
   NewButton(LHost, 'Limpar histórico', ClearHistoryClick, bvOutline, alClient);
+
+  LCard := NewSection(LBody, 'Aparência', 2);
+  LHost := NewSettingRow(LCard, 'Tema', 'Sistema segue o claro ou escuro do Windows.', CSelectW);
+  FTheme := Select(LHost, ['Sistema', 'Claro', 'Escuro'],
+    Max(0, IndexText(Store.GetSetting('theme'), ['', 'light', 'dark'])), LookChange);
+  LHost := NewSettingRow(LCard, 'Densidade',
+    'Compacta cabe mais na tela. Confortável tem campos e linhas maiores.', CSelectW);
+  FDensity := Select(LHost, ['Compacta', 'Confortável'],
+    IfThen(Store.GetSetting('density') = 'comfortable', 1, 0), LookChange);
 
   LCard := NewSection(LBody, 'Sistema', 3);
   LHost := NewSettingRow(LCard, 'Iniciar com o Windows',
@@ -161,6 +180,16 @@ begin
   ScrollResize(nil);
 end;
 
+procedure TSettingsPage.LookChange(Sender: TObject);
+const
+  CThemes: array[0..2] of string = ('', 'light', 'dark');
+begin
+  Store.SetSetting('theme', CThemes[EnsureRange(FTheme.ItemIndex, 0, 2)]);
+  Store.SetSetting('density', IfThen(FDensity.ItemIndex = 1, 'comfortable', 'compact'));
+  if Assigned(FOnLookChanged) then
+    FOnLookChanged(Self);
+end;
+
 procedure TSettingsPage.LangChange(Sender: TObject);
 const
   CCodes: array[0..2] of string = ('', 'pt', 'en');
@@ -197,6 +226,10 @@ procedure TSettingsPage.SettingToggle(Sender: TObject);
 begin
   if Sender = FClipToggle then
     Store.SetSetting('clip_on', IfThen(FClipToggle.Checked, '1', '0'))
+  else if Sender = FExplainToggle then
+    Store.SetSetting('clip_explain', IfThen(FExplainToggle.Checked, '1', '0'))
+  else if Sender = FSecretToggle then
+    Store.SetSetting('clip_secret_clear', IfThen(FSecretToggle.Checked, '1', '0'))
   else if Sender = FHotkeyToggle then
   begin
     Store.SetSetting('hotkey_on', IfThen(FHotkeyToggle.Checked, '1', '0'));

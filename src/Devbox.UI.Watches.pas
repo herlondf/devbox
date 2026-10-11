@@ -27,6 +27,7 @@ type
     FPick: TUIDropdown;
     FTable: TUIDataTable;
     FWatches: TWatches;
+    FUndo: TWatch;
     FSel: Integer;
     FTimer: TTimer;
     FChecking: Boolean;
@@ -39,9 +40,13 @@ type
     procedure PickItem(Sender: TObject; const AID: string);
     procedure AddClick(Sender: TObject);
     procedure RemoveClick(Sender: TObject);
+    procedure ActionClick(Sender: TObject; ARowIdx, AActionIdx: Integer);
+    procedure UndoRemove(Sender: TObject);
     procedure RowSelect(Sender: TObject; ARowIndex: Integer);
   public
     constructor Create(AOwner: TComponent); override;
+    function PageKey(var AKey: Word; AShift: TShiftState): Boolean; override;
+    function PageShortcuts: TArray<TDevShortcut>; override;
     { Pedido vindo de outra tela (Serviços: container ou porta). }
     procedure AddWatch(AKind: TWatchKind; const ATarget, ACli, ACaption: string);
     { Quantos avisos ativos mudou (para o selo do menu). }
@@ -152,10 +157,6 @@ begin
   NewHint(LCard, 'Container: botão "Avisar quando parar" em Serviços. pid:1234 vigia um processo só, quando há ' +
     'vários com o mesmo nome.').Top := 200000;
 
-  // Ações sobre a lista: embaixo, como no resto do Devbox.
-  Bar := NewPanel(Self, alBottom, 52);
-  Bar.Padding.SetBounds(0, ScaleValue(10), 0, 0);
-  NewButton(Bar, 'Remover aviso', RemoveClick, bvGhost, alRight);
 
   FTable := TUIDataTable.Create(Self);
   FTable.SelectionMode := tsmSingle;
@@ -164,6 +165,10 @@ begin
   FTable.AddColumn('kind', 'Tipo', 'kind', 120);
   FTable.AddColumn('what', 'Esperando', 'what', 420);
   FTable.AddColumn('since', 'Desde', 'since', 120);
+  FTable.AddColumn('acoes', '', 'acoes', 56);
+  FTable.SetColType('acoes', ctAction);
+  FTable.AddActionToCol('acoes', LineIcon(ActionDelete), 'Remover aviso');
+  FTable.OnActionClick := ActionClick;
   FTable.EmptyState.Title := 'Nenhum aviso ativo';
   FTable.EmptyState.Description := 'Avisa na bandeja quando um processo termina, uma porta fecha ou um container para.';
   FTable.AlignWithMargins := True;
@@ -286,13 +291,38 @@ procedure TWatchesPage.RemoveClick(Sender: TObject);
 begin
   if (FSel < 0) or (FSel > High(FWatches)) then
     Exit;
-  Store.DeleteWatch(FWatches[FSel].Id);
+  FUndo := FWatches[FSel];
+  Store.DeleteWatch(FUndo.Id);
   Reload;
+  TUIToastManager.Show('Aviso removido: ' + FUndo.Caption, ttInfo, DSUndoMs, 'Desfazer', UndoRemove);
+end;
+
+procedure TWatchesPage.UndoRemove(Sender: TObject);
+begin
+  FUndo.Id := 0;
+  Store.AddWatch(FUndo);
+  Reload;
+end;
+
+procedure TWatchesPage.ActionClick(Sender: TObject; ARowIdx, AActionIdx: Integer);
+begin
+  FSel := ARowIdx;
+  RemoveClick(nil);
 end;
 
 procedure TWatchesPage.RowSelect(Sender: TObject; ARowIndex: Integer);
 begin
   FSel := ARowIndex;
+end;
+
+function TWatchesPage.PageKey(var AKey: Word; AShift: TShiftState): Boolean;
+begin
+  Result := TableKey(FTable, AKey, nil, nil, procedure begin RemoveClick(nil); end);
+end;
+
+function TWatchesPage.PageShortcuts: TArray<TDevShortcut>;
+begin
+  Result := TableShortcuts(FTable, nil, nil, procedure begin RemoveClick(nil); end);
 end;
 
 procedure TWatchesPage.Fired(const AWatch: TWatch);

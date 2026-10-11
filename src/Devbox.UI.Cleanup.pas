@@ -21,6 +21,7 @@ uses
   UI.DataTable,
   UI.ProgressBar,
   Devbox.Cleanup,
+  Devbox.UI.SidePeek,
   Devbox.UI.Kit;
 
 type
@@ -35,7 +36,12 @@ type
     FFreedTotal: Int64;
     FProgress: TUIProgressBar;
     FStatus: TUILabel;
-    FStopBtn: TUIButton;
+    FAnalyzeBtns: array[TCleanTab] of TUIButton;     // Analisar vira Parar enquanto roda
+    FAnalyzeScans: array[TCleanTab] of TNotifyEvent;
+    FPeek: TSidePeek;
+    FPeekText: TUILabel;
+    FPeekTab: TCleanTab;
+    FPeekIndex: Integer;
     FFoundBy: array[TCleanTab] of string;   // texto do cartão "Encontrado" por aba
     FFoundSubBy: array[TCleanTab] of string;
     FBusy: Boolean;
@@ -57,7 +63,13 @@ type
     function NewTable(ATab: TCleanTab): TUIDataTable;
     function NewToolbar(AView: TPanel): TPanel;
     function NewActionBar(AView: TPanel): TPanel;
-    procedure Analyze(ABar: TPanel; AOnClick: TNotifyEvent);
+    procedure Analyze(ABar: TPanel; ATab: TCleanTab; AOnClick: TNotifyEvent);
+    procedure AnalyzeClick(Sender: TObject);
+    procedure RowSelect(Sender: TObject; ARowIndex: Integer);
+    procedure OpenSelected;
+    function ItemDetail(ATab: TCleanTab; AIndex: Integer; out APath: string): string;
+    procedure PeekOpenFolder(Sender: TObject);
+    procedure PeekAsk(Sender: TObject);
     procedure FolderButton(ABar: TPanel; ATab: TCleanTab);
     procedure CardsResize(Sender: TObject);
     function NewRootInput(ABar: TPanel; const ASetting, ADefault: string): TUIInput;
@@ -103,6 +115,13 @@ type
     constructor Create(AOwner: TComponent); override;
     procedure PageRefresh; override;
     procedure PageShown; override;
+    procedure PageHidden; override;
+    function PageContext: string; override;
+    function PageKey(var AKey: Word; AShift: TShiftState): Boolean; override;
+    function PageShortcuts: TArray<TDevShortcut>; override;
+    { Abre a aba AIndex (0 lixo de build ... 5 inicialização) e analisa. Busy até terminar. }
+    procedure AnalyzeTab(AIndex: Integer);
+    property Busy: Boolean read FBusy;
   end;
 
 implementation
@@ -115,6 +134,7 @@ uses
   System.Threading,
   System.Generics.Collections,
   System.Generics.Defaults,
+  Vcl.Forms,
   Vcl.Dialogs,
   UI.Theme,
   UI.Tokens,
@@ -128,6 +148,8 @@ const
   BigSizeOptions: array[0..3] of Int64 = (50, 100, 500, 1024);   // MB
   BigDayOptions: array[0..3] of Integer = (0, 90, 180, 365);
   CBigLimit = 300;
+  CTabCaptions: array[TCleanTab] of string = ('Lixo de build', 'Temporários e caches', 'Arquivos grandes',
+    'Pastas vazias', 'Containers', 'Inicialização');
   CStatusEveryMs = 150;
 
 { Montagem }
@@ -180,8 +202,6 @@ begin
   FProgress.Parent := Self;
 
   Bar := NewPanel(Self, alBottom, 30);
-  FStopBtn := NewButton(Bar, 'Parar', CancelClick, bvGhost, alRight);
-  FStopBtn.Visible := False;
   FStatus := NewHint(Bar, '', alClient);
 
   // Cada aba: o que é (uma linha), onde procurar e Analisar em cima; o que fazer com o achado embaixo.
@@ -190,7 +210,7 @@ begin
   FViews[ctJunk] := NewView(ctJunk, 'node_modules, bin/obj, dcu, __history, target, .gradle e caches de Python ' +
     'de projetos parados. Sai de vez: o próximo build refaz.');
   Bar := NewToolbar(FViews[ctJunk]);
-  Analyze(Bar, JunkScan);
+  Analyze(Bar, ctJunk, JunkScan);
   FJunkDays := NewSelect(Bar, 'Projetos parados há', ['parados há 7 dias', 'parados há 30 dias',
     'parados há 90 dias', 'parados há 180 dias'], 1);
   FolderButton(Bar, ctJunk);
@@ -209,7 +229,7 @@ begin
   FViews[ctTemp] := NewView(ctTemp, 'Arquivos que o Windows e os programas refazem sozinhos. ' +
     'Feche o navegador antes de limpar o cache dele.');
   Bar := NewToolbar(FViews[ctTemp]);
-  Analyze(Bar, TempScan);
+  Analyze(Bar, ctTemp, TempScan);
   Bar := NewActionBar(FViews[ctTemp]);
   NewButton(Bar, 'Limpar selecionados', TempDelete, bvOutline, alRight);
   NewButton(Bar, 'Selecionar tudo', SelectAllClick, bvGhost).Tag := Ord(ctTemp);
@@ -222,7 +242,7 @@ begin
   // Arquivos grandes
   FViews[ctBig] := NewView(ctBig, 'Os maiores arquivos a partir da pasta escolhida. Vai para a Lixeira.');
   Bar := NewToolbar(FViews[ctBig]);
-  Analyze(Bar, BigScan);
+  Analyze(Bar, ctBig, BigScan);
   FBigSize := NewSelect(Bar, 'Tamanho mínimo', ['a partir de 50 MB', 'a partir de 100 MB', 'a partir de 500 MB',
     'a partir de 1 GB'], 1);
   FBigDays := NewSelect(Bar, 'Data de modificação', ['qualquer data', 'sem mudar há 90 dias',
@@ -253,7 +273,7 @@ begin
   FViews[ctEmpty] := NewView(ctEmpty, 'Pastas sem nenhum arquivo dentro. .git e junções ficam de fora. ' +
     'Vai para a Lixeira.');
   Bar := NewToolbar(FViews[ctEmpty]);
-  Analyze(Bar, EmptyScan);
+  Analyze(Bar, ctEmpty, EmptyScan);
   FolderButton(Bar, ctEmpty);
   FEmptyRoot := NewRootInput(Bar, 'empty_root', GetEnvironmentVariable('USERPROFILE'));
   Bar := NewActionBar(FViews[ctEmpty]);
@@ -266,7 +286,7 @@ begin
   FViews[ctContainers] := NewView(ctContainers, 'Imagens sem tag (sobras de build) e volumes que nenhum ' +
     'container usa, no Docker do Windows e nas distros WSL ligadas.');
   Bar := NewToolbar(FViews[ctContainers]);
-  Analyze(Bar, DanglingScan);
+  Analyze(Bar, ctContainers, DanglingScan);
   Bar := NewActionBar(FViews[ctContainers]);
   NewButton(Bar, 'Apagar volumes sem uso', DanglingVolumes, bvGhost, alRight);
   NewButton(Bar, 'Limpar imagens órfãs', DanglingImages, bvOutline, alRight).Left := 0;
@@ -284,6 +304,7 @@ begin
   NewButton(Bar, 'Religar', StartupOn, bvGhost, alRight).Left := 0;
   FTables[ctStartup] := NewTable(ctStartup);
   FTables[ctStartup].SelectionMode := tsmSingle;
+  FTables[ctStartup].ShowCheckboxes := False;
   FTables[ctStartup].AddColumn('name', 'Programa', 'name', 220);
   FTables[ctStartup].AddColumn('state', 'Estado', 'state', 110);
   FTables[ctStartup].AddColumn('source', 'Onde', 'source', 190);
@@ -318,13 +339,211 @@ begin
 end;
 
 { Analisar fica na ponta direita da linha de busca. }
-procedure TCleanupPage.Analyze(ABar: TPanel; AOnClick: TNotifyEvent);
+procedure TCleanupPage.Analyze(ABar: TPanel; ATab: TCleanTab; AOnClick: TNotifyEvent);
 var
   LButton: TUIButton;
 begin
-  LButton := NewButton(ABar, 'Analisar', AOnClick, bvPrimary, alRight);
+  LButton := NewButton(ABar, 'Analisar', AnalyzeClick, bvPrimary, alRight);
+  LButton.Tag := Ord(ATab);
   LButton.AlignWithMargins := True;
   LButton.Margins.SetBounds(ScaleValue(8), 0, 0, 0);
+  FAnalyzeBtns[ATab] := LButton;
+  FAnalyzeScans[ATab] := AOnClick;
+end;
+
+{ O mesmo botão analisa e, enquanto roda, para. }
+procedure TCleanupPage.AnalyzeClick(Sender: TObject);
+begin
+  if FBusy then
+    CancelClick(Sender)
+  else
+    FAnalyzeScans[TCleanTab(TComponent(Sender).Tag)](Sender);
+end;
+
+{ Clique numa linha: o detalhe abre no painel lateral, com abrir a pasta e perguntar ao assistente. }
+procedure TCleanupPage.RowSelect(Sender: TObject; ARowIndex: Integer);
+const
+  CPeekW = 460;
+var
+  LTab: TCleanTab;
+  LIndex: Integer;
+  LPath: string;
+  LBar: TPanel;
+begin
+  LTab := TCleanTab(TComponent(Sender).Tag);
+  if (ARowIndex < 0) or (KeyNavigating and ((FPeek = nil) or not FPeek.Visible)) then
+    Exit;
+  LIndex := ARowIndex;  // OnRowSelect já entrega o índice do dado (não o da tela)
+  if FPeek = nil then
+  begin
+    FPeek := TSidePeek.CreatePeek(GetParentForm(Self), CPeekW);
+    LBar := TPanel.Create(FPeek);
+    LBar.BevelOuter := bvNone;
+    LBar.ParentBackground := False;
+    LBar.Height := ScaleValue(52);
+    LBar.Padding.SetBounds(0, ScaleValue(10), 0, 0);
+    LBar.Align := alBottom;
+    LBar.Parent := FPeek.Body;
+    NewButton(LBar, 'Perguntar ao assistente', PeekAsk, bvPrimary, alRight);
+    NewButton(LBar, 'Abrir pasta', PeekOpenFolder, bvOutline, alLeft);
+    FPeekText := TUILabel.Create(FPeek);
+    FPeekText.WordWrap := True;
+    FPeekText.AutoSize := False;
+    FPeekText.Align := alClient;
+    FPeekText.Parent := FPeek.Body;
+  end;
+  FPeekTab := LTab;
+  FPeekIndex := LIndex;
+  FPeekText.Caption := ItemDetail(LTab, LIndex, LPath);
+  FPeek.Title := CTabCaptions[LTab];
+  FPeek.Open;
+end;
+
+function TCleanupPage.ItemDetail(ATab: TCleanTab; AIndex: Integer; out APath: string): string;
+const
+  CMaxPeekPaths = 15;
+var
+  LLines: TArray<string>;
+begin
+  APath := '';
+  LLines := nil;
+  case ATab of
+    ctJunk:
+      if AIndex <= High(FJunk) then
+      begin
+        APath := FJunk[AIndex].Path;
+        LLines := ['Projeto: ' + FJunk[AIndex].Project, 'Tipo: ' + FJunk[AIndex].Kind,
+          'Tamanho: ' + SizeText(FJunk[AIndex].Size), Format('Projeto parado há %d dias', [FJunk[AIndex].IdleDays]),
+          '', 'Pasta: ' + APath, '', 'Apagar sai de vez (não vai para a Lixeira). O próximo build do projeto refaz.'];
+      end;
+    ctTemp:
+      if AIndex <= High(FSpots) then
+      begin
+        if FSpots[AIndex].Paths <> nil then
+          APath := FSpots[AIndex].Paths[0];
+        LLines := [FSpots[AIndex].Name, 'Tamanho: ' + SizeText(FSpots[AIndex].Size),
+          Format('Itens: %d', [FSpots[AIndex].Files]), FSpots[AIndex].Note, '', 'Caminhos:'] +
+          Copy(FSpots[AIndex].Paths, 0, CMaxPeekPaths);
+        if Length(FSpots[AIndex].Paths) > CMaxPeekPaths then
+          LLines := LLines + [Format('... e mais %d', [Length(FSpots[AIndex].Paths) - CMaxPeekPaths])];
+      end;
+    ctBig:
+      if AIndex <= High(FBig) then
+      begin
+        APath := FBig[AIndex].Path;
+        LLines := ['Arquivo: ' + ExtractFileName(APath), 'Tamanho: ' + SizeText(FBig[AIndex].Size),
+          'Mudou em: ' + FormatDateTime('dd/mm/yyyy', FBig[AIndex].Modified), '', 'Pasta: ' + ExtractFilePath(APath),
+          '', 'Vai para a Lixeira: dá para desfazer.'];
+      end;
+    ctEmpty:
+      if AIndex <= High(FEmpty) then
+      begin
+        APath := FEmpty[AIndex];
+        LLines := ['Pasta vazia:', APath, '', 'Vai para a Lixeira: dá para desfazer.'];
+      end;
+    ctContainers:
+      if AIndex <= High(FDangling) then
+        LLines := ['Onde: ' + FDangling[AIndex].Where, Format('Imagens órfãs: %d (%s)', [FDangling[AIndex].Images,
+          SizeText(FDangling[AIndex].ImagesSize)]), Format('Volumes sem uso: %d', [FDangling[AIndex].Volumes]), '',
+          'Volume sem uso pode ter dados de um container que você apagou. Confira antes.'];
+    ctStartup:
+      if AIndex <= High(FStartup) then
+      begin
+        LLines := ['Programa: ' + FStartup[AIndex].Name, 'Estado: ' + IfThen(FStartup[AIndex].Enabled, 'ligado',
+          'desligado'), 'Onde: ' + FStartup[AIndex].SourceText, '', 'Comando:', FStartup[AIndex].Command];
+        APath := ExtractFilePath(FStartup[AIndex].Command.DeQuotedString('"'));
+      end;
+  end;
+  Result := string.Join(sLineBreak, LLines);
+end;
+
+procedure TCleanupPage.PeekOpenFolder(Sender: TObject);
+var
+  LPath: string;
+begin
+  ItemDetail(FPeekTab, FPeekIndex, LPath);
+  if LPath = '' then
+    Exit;
+  if TFile.Exists(LPath) then
+    Launch('explorer.exe', '/select,"' + LPath + '"')
+  else
+    Launch('explorer.exe', '"' + LPath + '"');
+end;
+
+procedure TCleanupPage.PeekAsk(Sender: TObject);
+var
+  LPath: string;
+begin
+  if Assigned(AskAssistant) then
+    AskAssistant('Na Limpeza do Devbox, posso apagar isto com segurança? O que é e o que pode quebrar?' +
+      sLineBreak + sLineBreak + ItemDetail(FPeekTab, FPeekIndex, LPath));
+end;
+
+procedure TCleanupPage.PageHidden;
+begin
+  if FPeek <> nil then
+    FPeek.Close_;
+  inherited;
+end;
+
+function TCleanupPage.PageKey(var AKey: Word; AShift: TShiftState): Boolean;
+begin
+  Result := TableKey(FTables[TCleanTab(FTabs.ActiveIndex)], AKey, OpenSelected, nil, nil);
+end;
+
+function TCleanupPage.PageShortcuts: TArray<TDevShortcut>;
+begin
+  Result := TableShortcuts(FTables[TCleanTab(FTabs.ActiveIndex)], OpenSelected, nil, nil);
+end;
+
+{ Enter: o detalhe da linha escolhida no painel lateral (o mesmo do clique). }
+procedure TCleanupPage.OpenSelected;
+var
+  LTable: TUIDataTable;
+begin
+  LTable := FTables[TCleanTab(FTabs.ActiveIndex)];
+  if LTable.SelectedRow >= 0 then
+    RowSelect(LTable, LTable.ActualRowIndex(LTable.SelectedRow));
+end;
+
+procedure TCleanupPage.AnalyzeTab(AIndex: Integer);
+var
+  LTab: TCleanTab;
+begin
+  LTab := TCleanTab(EnsureRange(AIndex, 0, Ord(High(TCleanTab))));
+  FTabs.ActiveIndex := Ord(LTab);
+  ShowTab(LTab);
+  if LTab = ctStartup then
+    StartupScan(nil)
+  else
+    FAnalyzeScans[LTab](nil);
+end;
+
+{ O assistente vê o que a aba aberta achou (para ajudar a decidir o que apagar). }
+function TCleanupPage.PageContext: string;
+const
+  CMaxRows = 60;
+var
+  LTab: TCleanTab;
+  LIndex, LCount: Integer;
+  LPath: string;
+begin
+  LTab := TCleanTab(Max(FTabs.ActiveIndex, 0));
+  Result := 'Limpeza, aba ' + CTabCaptions[LTab] + '. ' + FStatus.Caption;
+  case LTab of
+    ctJunk: LCount := Length(FJunk);
+    ctTemp: LCount := Length(FSpots);
+    ctBig: LCount := Length(FBig);
+    ctEmpty: LCount := Length(FEmpty);
+    ctContainers: LCount := Length(FDangling);
+  else
+    LCount := Length(FStartup);
+  end;
+  if LCount = 0 then
+    Exit(Result + sLineBreak + 'Ainda nada analisado nesta aba.');
+  Result := Result + sLineBreak + Format('%d itens:', [LCount]);
+  for LIndex := 0 to Min(LCount, CMaxRows) - 1 do
+    Result := Result + sLineBreak + '- ' + ItemDetail(LTab, LIndex, LPath).Replace(sLineBreak, ' | ');
 end;
 
 procedure TCleanupPage.FolderButton(ABar: TPanel; ATab: TCleanTab);
@@ -351,6 +570,9 @@ function TCleanupPage.NewTable(ATab: TCleanTab): TUIDataTable;
 begin
   Result := TUIDataTable.Create(Self);
   Result.SelectionMode := tsmMultiple;
+  Result.ShowCheckboxes := True;
+  Result.Tag := Ord(ATab);
+  Result.OnRowSelect := RowSelect;
   Result.Density := tdCompact;
   Result.EmptyState.Title := 'Ainda não analisado';
   Result.EmptyState.Description := 'Escolha onde procurar e clique em Analisar.';
@@ -462,10 +684,14 @@ end;
 { Varredura em segundo plano }
 
 procedure TCleanupPage.SetBusy(ABusy: Boolean; const AStatus: string);
+var
+  LTab: TCleanTab;
 begin
   FBusy := ABusy;
   FProgress.Visible := ABusy;
-  FStopBtn.Visible := ABusy;
+  for LTab := Low(TCleanTab) to High(TCleanTab) do
+    if FAnalyzeBtns[LTab] <> nil then
+      FAnalyzeBtns[LTab].Caption := IfThen(ABusy, 'Parar', 'Analisar');
   FStatus.Caption := AStatus;
 end;
 

@@ -13,6 +13,7 @@ uses
   UI.Button,
   UI.Labels,
   UI.Card,
+  UI.DataTable,
   UI.Toggle;
 
 type
@@ -58,6 +59,11 @@ type
 
 function DevShortcut(const AKeys, ACaption: string; const AAction: TProc): TDevShortcut;
 
+{ Teclas das tabelas (docs/DESIGN.md): J/K ou setas andam, Enter abre o detalhe, E edita,
+  Del exclui. Ação nil = tecla não vale na tela. Não age enquanto a pessoa digita num campo. }
+function TableKey(ATable: TUIDataTable; var AKey: Word; const AOpen, AEdit, ADelete: TProc): Boolean;
+function TableShortcuts(ATable: TUIDataTable; const AOpen, AEdit, ADelete: TProc): TArray<TDevShortcut>;
+
 const
   { Medidas do design system (px a 96 dpi; ScaleValue na hora de usar). Ver docs/DESIGN.md. }
   DSGap = 12;            // entre cartões, entre colunas
@@ -68,6 +74,16 @@ const
   DSCardPadV = 12;
 
 var
+  { Abre o assistente e já pergunta (a janela principal liga). Tela que quer "perguntar
+    sobre isto" chama com o texto pronto. }
+  AskAssistant: TProc<string>;
+
+  { True enquanto J/K movem a linha: a tela não abre o painel lateral a cada passo. }
+  KeyNavigating: Boolean;
+
+  { O Clipboard viu um erro copiado (pilha, exceção): a janela principal oferece explicar. }
+  ErrorCopied: TProc<string>;
+
   { A janela principal refaz o rodapé (tela com abas chama ao trocar de aba). }
   ShortcutsChanged: TProc;
 
@@ -109,6 +125,17 @@ const
   IconMail = 'M3 6.75h18v10.5H3z M3 7.5l9 6 9-6';
   IconCalendar = 'M4.5 6h15v14.25h-15z M4.5 10.5h15 M8.25 3.75v3.75 M15.75 3.75v3.75';
   IconUser = 'M12 3.75a3.75 3.75 0 1 0 0 7.5 3.75 3.75 0 0 0 0-7.5z M4.5 20.25a7.5 7.5 0 0 1 15 0';
+  { Quanto tempo o aviso "Desfazer" fica depois de excluir algo. }
+  DSUndoMs = 8000;
+  { Ícones das ações nas tabelas (coluna de ações). }
+  ActionPlay = 'M7 5.5v13l11-6.5z';
+  ActionStop = 'M6.5 6.5h11v11h-11z';
+  ActionPower = 'M12 3v8 M6.4 6.8a8 8 0 1 0 11.2 0';
+  ActionEdit = 'M16.9 4.6l2.5 2.5L8.5 18H6v-2.5z M14.9 6.6l2.5 2.5';
+  ActionDelete = 'M5 7h14 M10 7V5h4v2 M7 7l1 12h8l1-12 M10.5 11v5 M13.5 11v5';
+  IconTerminal = 'M4 5h16v14H4z M7.5 9.5 10 12l-2.5 2.5 M12 15h4';
+  IconGit = 'M6 3.75v10.5 M6 14.25a2.25 2.25 0 1 0 0 4.5 2.25 2.25 0 0 0 0-4.5z ' +
+    'M18 5.25a2.25 2.25 0 1 0 0 4.5 2.25 2.25 0 0 0 0-4.5z M18 9.75c0 4.5-6 3-12 6';
   IconHome = 'M3 11.25 12 4.5l9 6.75 M5.25 9.75v10.5h4.5v-6h4.5v6h4.5V9.75';
   IconTimer = 'M9.75 2.25h4.5 M12 2.25v2.25 M12 4.5a8.25 8.25 0 1 0 0 16.5 8.25 8.25 0 0 0 0-16.5z M12 8.25v4.5l3 1.5';
   IconNews = 'M5.25 4.5h13.5v15H5.25z M8.25 8.25h7.5 M8.25 12h7.5 M8.25 15.75h4.5';
@@ -121,6 +148,11 @@ implementation
 
 uses
   System.Threading,
+  System.StrUtils,
+  System.Math,
+  Winapi.Windows,
+  Vcl.StdCtrls,
+  Vcl.Forms,
   UI.Theme,
   UI.Painter.Vcl;
 
@@ -224,6 +256,73 @@ begin
   Result.Keys := AKeys;
   Result.Caption := ACaption;
   Result.Action := AAction;
+end;
+
+function UserTyping: Boolean;
+var
+  LName: string;
+begin
+  if Screen.ActiveControl = nil then
+    Exit(False);
+  LName := Screen.ActiveControl.ClassName;
+  Result := (Screen.ActiveControl is TCustomEdit) or ContainsText(LName, 'Input') or
+    ContainsText(LName, 'Edit') or ContainsText(LName, 'TextArea') or ContainsText(LName, 'Memo') or
+    ContainsText(LName, 'Code');
+end;
+
+procedure TableMove(ATable: TUIDataTable; ADelta: Integer);
+begin
+  KeyNavigating := True;
+  try
+    ATable.MoveFocusTo(ATable.FocusedRow + ADelta);
+  finally
+    KeyNavigating := False;
+  end;
+end;
+
+function TableKey(ATable: TUIDataTable; var AKey: Word; const AOpen, AEdit, ADelete: TProc): Boolean;
+begin
+  Result := False;
+  if UserTyping or not ATable.Showing then
+    Exit;
+  Result := True;
+  case AKey of
+    Ord('J'): TableMove(ATable, 1);
+    Ord('K'): TableMove(ATable, -1);
+    VK_DOWN, VK_UP:
+      if ATable.Focused then
+        Result := False  // a tabela já anda sozinha
+      else
+        TableMove(ATable, IfThen(AKey = VK_DOWN, 1, -1));
+    VK_RETURN:
+      if Assigned(AOpen) and (ATable.SelectedRow >= 0) then
+        AOpen()
+      else
+        Result := False;
+    Ord('E'):
+      if Assigned(AEdit) and (ATable.SelectedRow >= 0) then
+        AEdit()
+      else
+        Result := False;
+    VK_DELETE:
+      if Assigned(ADelete) and (ATable.SelectedRow >= 0) then
+        ADelete()
+      else
+        Result := False;
+  else
+    Result := False;
+  end;
+end;
+
+function TableShortcuts(ATable: TUIDataTable; const AOpen, AEdit, ADelete: TProc): TArray<TDevShortcut>;
+begin
+  Result := [DevShortcut('J K', 'Andar', procedure begin TableMove(ATable, 1); end)];
+  if Assigned(AOpen) then
+    Result := Result + [DevShortcut('Enter', 'Detalhe', AOpen)];
+  if Assigned(AEdit) then
+    Result := Result + [DevShortcut('E', 'Editar', AEdit)];
+  if Assigned(ADelete) then
+    Result := Result + [DevShortcut('Del', 'Excluir', ADelete)];
 end;
 
 function TDevPage.NewPanel(AParent: TWinControl; AAlign: TAlign; AHeight: Integer): TPanel;

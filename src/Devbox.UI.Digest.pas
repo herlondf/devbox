@@ -6,7 +6,8 @@
     issues que pedem atenção (atrasada, vence hoje, impedida, menção, review, CI).
   - Atividade recente das issues.
   - Issues por status e minutos de foco na semana.
-  Clique em qualquer linha leva para a tela certa. O resumo do dia é o assistente
+  A ordem segue a hora: de manhã agenda primeiro; à tarde issues e e-mails; no fim do dia o
+  que ficou aberto. Clique em qualquer linha leva para a tela certa. O resumo do dia é o assistente
   quem faz, quando pedido (ferramenta devbox_meu_dia). }
 
 interface
@@ -58,6 +59,7 @@ type
     procedure FillMails;
     procedure FillIssues;
     procedure FillCharts;
+    procedure ArrangeForNow;
     procedure StatClick(Sender: TObject);
     procedure AgendaClick(Sender: TObject; AIndex: Integer; const AItem: TUIVListItem);
     procedure MailClick(Sender: TObject; AIndex: Integer; const AItem: TUIVListItem);
@@ -237,11 +239,56 @@ end;
 
 procedure TDigestPage.PageRefresh;
 begin
+  ArrangeForNow;
   FillAgenda;
   FillMails;
   FillIssues;
   FillCharts;
   LayoutGrid;
+end;
+
+{ Manhã (até 12h): agenda, issues, e-mails. Tarde: issues, e-mails, agenda. Fim do dia
+  (17h em diante): o que ficou aberto primeiro, com o convite para o resumo e as horas. }
+procedure TDigestPage.ArrangeForNow;
+const
+  CListCols = 4;
+  CNoonHour = 12;
+  CEveningHour = 17;
+var
+  LHour: Integer;
+  LOrder: array[0..2] of TUIVirtualList;
+  I: Integer;
+begin
+  LHour := HourOf(Now);
+  if LHour < CNoonHour then
+  begin
+    LOrder[0] := FAgendaList;
+    LOrder[1] := FIssueList;
+    LOrder[2] := FMailList;
+    Hint := 'Bom dia. Primeiro a agenda e o que vence hoje.';
+    TUIDashboardWidget(FIssueList.Parent).Title := 'Issues que pedem atenção';
+    TUIDashboardWidget(FAgendaList.Parent).Title := 'Agenda de hoje';
+  end
+  else if LHour < CEveningHour then
+  begin
+    LOrder[0] := FIssueList;
+    LOrder[1] := FMailList;
+    LOrder[2] := FAgendaList;
+    Hint := 'Boa tarde. Issues e e-mails primeiro; a agenda que resta ao lado.';
+    TUIDashboardWidget(FIssueList.Parent).Title := 'Issues que pedem atenção';
+    TUIDashboardWidget(FAgendaList.Parent).Title := 'Resto da agenda';
+  end
+  else
+  begin
+    LOrder[0] := FIssueList;
+    LOrder[1] := FMailList;
+    LOrder[2] := FAgendaList;
+    Hint := 'Fim do dia: o que ficou aberto. Peça ao assistente o resumo do dia ou para lançar horas.';
+    TUIDashboardWidget(FIssueList.Parent).Title := 'O que ficou aberto';
+    TUIDashboardWidget(FAgendaList.Parent).Title := 'Agenda de hoje';
+  end;
+  for I := 0 to High(LOrder) do
+    TUIDashboardWidget(LOrder[I].Parent).Col := I * CListCols;
 end;
 
 { ── Listas ──────────────────────────────────────────────────────────────── }

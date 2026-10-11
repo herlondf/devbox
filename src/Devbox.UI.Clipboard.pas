@@ -1,4 +1,4 @@
-unit Devbox.UI.Clipboard;
+﻿unit Devbox.UI.Clipboard;
 
 { Histórico do clipboard (texto, imagem, arquivos) e snippets. Busca, prévia,
   colar na janela de antes, conversores, OCR, salvar PNG, hash e zip. }
@@ -34,6 +34,7 @@ type
     FOnEditSnippet: TClipEditEvent;
     FWatcher: TClipboardWatcher;
     FClips: TClips;
+    FUndo: TClip;
     FShown: TClips;
     FSearch: TUIInput;
     FSnippetChip: TUIFilterChip;
@@ -48,7 +49,12 @@ type
     FConvertBtn: TUIButton;
     FConvertMenu: TUIDropdown;
     FPasteTimer: TTimer;
+    FSecretTimer: TTimer;
+    FSecretText: string;
     FPrevWnd: HWND;
+    procedure SecretTimerTick(Sender: TObject);
+    procedure KeepSecretClick(Sender: TObject);
+    procedure UndoDelete(Sender: TObject);
     procedure ClipCopied(AKind: TClipKind; const AText: string; const AData: TBytes);
     procedure FilterClips;
     function SelectedClip(out AClip: TClip): Boolean;
@@ -100,12 +106,14 @@ uses
   System.Zip,
   Vcl.Forms,
   Vcl.Dialogs,
+  Vcl.Clipbrd,
   UI.Toast,
   Devbox.Store,
   Devbox.Focus,
   Devbox.Convert;
 
 const
+  CSecretClearMs = 30000;
   CPreviewWidth = 440;
   CMaxTitle = 140;
   CLineHeight = 17;
@@ -240,6 +248,12 @@ begin
   FPasteTimer.Interval := 80;
   FPasteTimer.OnTimer := PasteTimerTick;
 
+  // Senha ou token copiado: some do clipboard do Windows em 30 s (Configuração › Geral).
+  FSecretTimer := TTimer.Create(Self);
+  FSecretTimer.Enabled := False;
+  FSecretTimer.Interval := CSecretClearMs;
+  FSecretTimer.OnTimer := SecretTimerTick;
+
   FWatcher := TClipboardWatcher.Create(
     procedure(AKind: TClipKind; const AText: string; const AData: TBytes)
     begin
@@ -302,9 +316,37 @@ begin
   if (Store.GetSetting('clip_on', '1') <> '1') or (FocusActive and FocusPauseClipboard) then
     Exit;
   if (AKind = ckText) and LooksSecret(AText) then
+  begin
+    if Store.GetSetting('clip_secret_clear', '1') = '1' then
+    begin
+      FSecretText := AText;
+      FSecretTimer.Enabled := False;
+      FSecretTimer.Enabled := True;
+      TUIToastManager.Show('Senha ou token copiado: não vai para o histórico e sai do clipboard em 30 s.',
+        ttInfo, 6000, 'Manter', KeepSecretClick);
+    end;
     Exit;
+  end;
   Store.AddClip(AText, AKind, AData);
   ReloadClips;
+  if (AKind = ckText) and Assigned(ErrorCopied) and (Store.GetSetting('clip_explain', '1') = '1') and
+    LooksLikeError(AText) then
+    ErrorCopied(AText);
+end;
+
+procedure TClipboardPage.SecretTimerTick(Sender: TObject);
+begin
+  FSecretTimer.Enabled := False;
+  // Só limpa se o segredo ainda está lá: o usuário pode ter copiado outra coisa.
+  if Clipboard.HasFormat(CF_UNICODETEXT) and (Clipboard.AsText = FSecretText) then
+    Clipboard.Clear;
+  FSecretText := '';
+end;
+
+procedure TClipboardPage.KeepSecretClick(Sender: TObject);
+begin
+  FSecretTimer.Enabled := False;
+  FSecretText := '';
 end;
 
 procedure TClipboardPage.ReloadClips;
@@ -549,6 +591,21 @@ begin
   if not SelectedClip(C) then
     Exit;
   Store.DeleteClip(C.Id);
+  ReloadClips;
+  // Imagem não volta: o arquivo dela sai junto.
+  if C.Kind = ckImage then
+    Exit;
+  FUndo := C;
+  TUIToastManager.Show(IfThen(C.Pinned, 'Snippet excluído', 'Item excluído'), ttInfo, DSUndoMs, 'Desfazer',
+    UndoDelete);
+end;
+
+procedure TClipboardPage.UndoDelete(Sender: TObject);
+begin
+  if FUndo.Pinned then
+    Store.SaveSnippet(0, FUndo.Text, FUndo.Abbrev)
+  else
+    Store.AddClip(FUndo.Text, FUndo.Kind, nil);
   ReloadClips;
 end;
 

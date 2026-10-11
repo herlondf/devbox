@@ -89,6 +89,10 @@
     <DCCReference Include="Devbox.UI.SidePeek.pas"/>
     <DCCReference Include="Devbox.UI.HostPage.pas"/>
     <DCCReference Include="Devbox.Health.pas"/>
+    <DCCReference Include="Devbox.Wsl.pas"/>
+    <DCCReference Include="Devbox.UI.Wsl.pas"/>
+    <DCCReference Include="Devbox.Git.pas"/>
+    <DCCReference Include="Devbox.UI.Git.pas"/>
     <DCCReference Include="Devbox.UI.Tools.pas"/>
     <DCCReference Include="Devbox.UI.Services.pas"/>
     <DCCReference Include="Devbox.UI.Cleanup.pas"/>

@@ -2369,7 +2369,9 @@ begin
     'tela ("isso", "esse texto", "esse log", "esse e-mail"): o conteúdo vem abaixo em "Tela aberta" (e a ferramenta ' +
     'devbox_tela_atual lê de novo). Traduzir, resumir, explicar, melhorar texto, mensagem de commit: responda e, ' +
     'quando o resultado for um texto para usar, ofereça devbox_copiar. Comando de terminal: devbox_rodar_comando ' +
-    '(o usuário confirma antes).') + sLineBreak + sLineBreak + LScreen;
+    '(o usuário confirma antes). Organizar a caixa de e-mail: devbox_email_organizar mostra as sugestões ' +
+    'numeradas; o usuário pode descartar (devbox_email_descartar) e então devbox_email_aplicar. Responda em ' +
+    'markdown curto (listas, negrito) quando ajudar.') + sLineBreak + sLineBreak + LScreen;
 end;
 
 { Antes de cada pergunta (o usuário começou a digitar): o prompt leva a tela de agora. }

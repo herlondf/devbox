@@ -84,7 +84,8 @@ begin
   FTable.SetColType('kind', ctBadge);
   FTable.AddBadgeMap('kind', 'snippet', UITheme.Tokens.Color.PrimarySubtle, UITheme.Tokens.Color.Primary);
   FTable.AddBadgeMap('kind', 'pronto', UITheme.Tokens.Color.SuccessSubtle, UITheme.Tokens.Color.Success);
-  FTable.EmptyStateText := 'Nenhum atalho ainda';
+  FTable.EmptyState.Title := 'Nenhum atalho ainda';
+  FTable.EmptyState.Description := 'Novo snippet cria um ;atalho que vira texto em qualquer programa.';
   FTable.Align := alClient;
   FTable.Top := 100000;
   FTable.Parent := Self;

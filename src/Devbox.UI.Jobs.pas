@@ -146,7 +146,8 @@ begin
   FTable.AddBadgeMap('state', 'rodando', C.InfoSubtle, C.Info);
   FTable.AddBadgeMap('state', 'desligada', C.BGMuted, C.FGMuted);
   FTable.AddBadgeMap('state', 'nunca', C.BGMuted, C.FGMuted);
-  FTable.EmptyStateText := 'Nenhuma tarefa. Ex.: backup do banco todo dia às 18:00.';
+  FTable.EmptyState.Title := 'Nenhuma tarefa';
+  FTable.EmptyState.Description := 'Ex.: backup do banco todo dia às 18:00. Se falhar, avisa na bandeja.';
   FTable.Top := 100000;
   FTable.Align := alClient;
   FTable.Parent := Self;

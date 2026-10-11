@@ -352,7 +352,8 @@ begin
   Result := TUIDataTable.Create(Self);
   Result.SelectionMode := tsmMultiple;
   Result.Density := tdCompact;
-  Result.EmptyStateText := 'Clique em Analisar';
+  Result.EmptyState.Title := 'Ainda não analisado';
+  Result.EmptyState.Description := 'Escolha onde procurar e clique em Analisar.';
   Result.Top := 100000;
   Result.Align := alClient;
   Result.Parent := FViews[ATab];

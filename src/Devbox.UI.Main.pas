@@ -67,6 +67,9 @@ type
     FToolsPage: TToolsPage;
     FPomodoro: TPomodoroPage;
     FIssuesConfig: THostPage;
+    FHealthTimer: TTimer;
+    FHealthRunning: Boolean;
+    FBalloonPage: string;          // tela que o clique no aviso abre (manutenção: Limpeza)
     FFocusItem: TMenuItem;
     FGooglePage: TGooglePage;
     FMailPage: TMailPage;
@@ -96,6 +99,11 @@ type
     procedure RegisterDevboxTools;
     function ScreenContext: string;
     function MyDayText: string;
+    procedure RegisterMailTools;
+    procedure HealthTick(Sender: TObject);
+    procedure HealthNow(Sender: TObject);
+    procedure RunHealth(AManual: Boolean; const AOnDone: TProc<string> = nil);
+    procedure TrayBalloonClick(Sender: TObject);
     procedure BuildShell;
     procedure FillFooter;
     procedure FooterClick(Sender: TObject);
@@ -164,10 +172,12 @@ uses
   Devbox.Realtime,
   Devbox.Speech,
   UI.Audio.Capture,
+  Devbox.Health,
   Devbox.Store;
 
 const
   HotkeyId = 1;
+  CToastInset = 64;
 
 type
   TFooterLabel = class(TControl);
@@ -248,6 +258,8 @@ begin
   end;
   ApplyCompactSize;
   TUIToastManager.Position := tpBottomRight;
+  // Acima do rodapé de atalhos e do botão do assistente, que ficam no canto de baixo.
+  TUIToastManager.EdgeInset := CToastInset;
   FPages := TDictionary<string, TDevPage>.Create;
   FPageOrder := TList<string>.Create;
 
@@ -319,6 +331,7 @@ begin
   Settings := TSettingsPage.Create(Self);
   Settings.OnHotkeyChanged := HotkeySettingChanged;
   Settings.OnHistoryCleared := HistoryCleared;
+  Settings.OnHealthNow := HealthNow;
   FGeneralPage := Settings;
   // "Procurar agora" da tela Geral usa o atualizador da tela Issues (criada antes).
   FGeneralPage.OnCheckUpdates := IssuesCheckUpdates;
@@ -383,6 +396,12 @@ begin
       Result := ScreenContext;
     end;
   RegisterDevboxTools;
+  RegisterMailTools;
+  // Manutenção do Windows: confere a agenda a cada minuto (Configuração › Geral).
+  FHealthTimer := TTimer.Create(Self);
+  FHealthTimer.Interval := 60 * 1000;
+  FHealthTimer.OnTimer := HealthTick;
+  FHealthTimer.Enabled := True;
   FIssuesPage.OnPaletteCommands :=
     procedure(APalette: TUICommandPalette)
     begin
@@ -673,6 +692,7 @@ begin
   FTray.Hint := 'Devbox  ·  Win+Alt+B abre o clipboard';
   FTray.PopupMenu := FTrayMenu;
   FTray.OnDblClick := MenuOpenClick;
+  FTray.OnBalloonClick := TrayBalloonClick;
   FTray.Visible := True;
 end;
 
@@ -877,6 +897,7 @@ end;
   também o aviso da própria tela. }
 procedure TMainForm.ShowNotify(const ATitle, AText: string; AError: Boolean);
 begin
+  FBalloonPage := '';
   FTray.BalloonTitle := ATitle;
   FTray.BalloonHint := AText;
   if AError then
@@ -888,6 +909,101 @@ begin
     TUIToastManager.Show(ATitle + ': ' + AText, ttError, 6000)
   else if Visible then
     TUIToastManager.Show(ATitle + ': ' + AText, ttSuccess, 5000);
+end;
+
+procedure TMainForm.TrayBalloonClick(Sender: TObject);
+begin
+  if FBalloonPage = '' then
+    Exit;
+  ShowPage(FBalloonPage);
+  ShowWindow_;
+end;
+
+procedure TMainForm.HealthTick(Sender: TObject);
+var
+  LSchedule: THealthSchedule;
+  LHour: Integer;
+  LKey: string;
+begin
+  if FHealthRunning or (Store.GetSetting('health_on', '1') <> '1') then
+    Exit;
+  LSchedule := THealthSchedule(EnsureRange(StrToIntDef(Store.GetSetting('health_schedule', '0'), 0), 0,
+    Ord(High(THealthSchedule))));
+  LHour := HealthDueHour(LSchedule, Now);
+  if LHour < 0 then
+    Exit;
+  LKey := FormatDateTime('yyyy-mm-dd', Date) + ' ' + IntToStr(LHour);
+  if Store.GetSetting('health_last') = LKey then
+    Exit;
+  Store.SetSetting('health_last', LKey);
+  RunHealth(False);
+end;
+
+procedure TMainForm.HealthNow(Sender: TObject);
+begin
+  TUIToastManager.Show('Procurando o que dá para limpar e ajustar...', ttLoading, 4000);
+  RunHealth(True);
+end;
+
+{ Varredura em segundo plano. Automático: só avisa se achou algo. Manual: sempre diz o resultado.
+  AOnDone (assistente) recebe o texto em vez do aviso. }
+procedure TMainForm.RunHealth(AManual: Boolean; const AOnDone: TProc<string>);
+const
+  CJunkIdleDays = 30;
+var
+  LRoots: TArray<string>;
+begin
+  if FHealthRunning then
+  begin
+    if Assigned(AOnDone) then
+      AOnDone('A manutenção já está rodando; tente de novo em um minuto.');
+    Exit;
+  end;
+  FHealthRunning := True;
+  // Mesmas pastas da Limpeza › Lixo de build (o banco só na thread da tela).
+  LRoots := Store.GetSetting('junk_roots', GetEnvironmentVariable('USERPROFILE')).Split([';'],
+    TStringSplitOptions.ExcludeEmpty);
+  RunTask(
+    procedure
+    var
+      LReport: THealthReport;
+      LError: string;
+    begin
+      LError := '';
+      try
+        LReport := RunHealthScan(LRoots, CJunkIdleDays);
+      except
+        on E: Exception do
+          LError := E.Message;
+      end;
+      QueueUI(
+        procedure
+        begin
+          FHealthRunning := False;
+          if Assigned(AOnDone) then
+          begin
+            if LError <> '' then
+              AOnDone('A varredura falhou: ' + LError)
+            else
+              AOnDone(LReport.Title + '. ' + LReport.Text);
+            Exit;
+          end;
+          if LError <> '' then
+          begin
+            if AManual then
+              TUIToastManager.Show('A manutenção falhou: ' + LError, ttError, 6000);
+            Exit;
+          end;
+          if LReport.Findings = 0 then
+          begin
+            if AManual then
+              TUIToastManager.Show('Tudo em ordem: nada para limpar ou ajustar agora.', ttSuccess, 4000);
+            Exit;
+          end;
+          ShowNotify(LReport.Title, LReport.Text, False);
+          FBalloonPage := 'cleanup';
+        end);
+    end);
 end;
 
 procedure TMainForm.FocusMenuClick(Sender: TObject);
@@ -1007,6 +1123,118 @@ begin
       Result := Result + Format('- %s, de %s: %s', [LMsg.Subject, LMsg.FromName, LMsg.Snippet]) + sLineBreak;
       Inc(LCount);
     end;
+end;
+
+{ Espera uma ação assíncrona da tela terminar sem travar a janela (as ferramentas do
+  assistente rodam na thread da tela e precisam devolver o resultado). }
+procedure WaitUntil(const ADone: TFunc<Boolean>; ATimeoutMs: Cardinal);
+var
+  LStart: UInt64;
+begin
+  LStart := GetTickCount64;
+  while not ADone() and (GetTickCount64 - LStart < ATimeoutMs) do
+  begin
+    Application.ProcessMessages;
+    Sleep(20);
+  end;
+end;
+
+{ Organizar e aplicar sugestões do e-mail: o que eram botões da tela E-mail. }
+procedure TMainForm.RegisterMailTools;
+const
+  CMailTimeoutMs = 180000;
+var
+  LDef: TUIAssistantToolDef;
+begin
+  FIssuesPage.Assistant.Tools.Register('devbox_email_organizar',
+    'Lê os e-mails da caixa de entrada e sugere o que fazer com cada um (rótulo, arquivar, marcar lido). ' +
+    'Não muda nada na caixa: devolve as sugestões numeradas para o usuário revisar.',
+    function(const AArgs: TJSONObject): string
+    var
+      LDone: Boolean;
+      LText: string;
+    begin
+      ShowPage('mail');
+      LDone := False;
+      FMailPage.Organize(
+        procedure(AOk: Boolean; AText: string)
+        begin
+          LText := AText;
+          LDone := True;
+        end);
+      WaitUntil(
+        function: Boolean
+        begin
+          Result := LDone;
+        end, CMailTimeoutMs);
+      if not LDone then
+        LText := 'Demorou demais; as sugestões aparecem na tela E-mail quando ficarem prontas.';
+      Result := LText;
+    end);
+
+  FIssuesPage.Assistant.Tools.Register('devbox_email_sugestoes',
+    'Sugestões pendentes para os e-mails, numeradas.',
+    function(const AArgs: TJSONObject): string
+    begin
+      Result := FMailPage.SuggestionsText;
+    end);
+
+  LDef := FIssuesPage.Assistant.Tools.Register('devbox_email_descartar',
+    'Descarta uma sugestão (o e-mail fica como está). Use o número da lista de sugestões.',
+    function(const AArgs: TJSONObject): string
+    begin
+      if FMailPage.DiscardSuggestion(AArgs.GetValue<Integer>('numero', 0)) then
+        Result := 'Descartada. ' + sLineBreak + FMailPage.SuggestionsText
+      else
+        Result := 'Não achei a sugestão com esse número.';
+    end);
+  LDef.AddParam('numero', pkInteger, 'Número da sugestão', True);
+
+  FIssuesPage.Assistant.Tools.Register('devbox_email_aplicar',
+    'Aplica na caixa de entrada todas as sugestões pendentes (arquiva, marca lido, põe rótulo). O usuário confirma.',
+    function(const AArgs: TJSONObject): string
+    var
+      LDone: Boolean;
+      LText: string;
+    begin
+      LDone := False;
+      FMailPage.ApplySuggestions(
+        procedure(AText: string)
+        begin
+          LText := AText;
+          LDone := True;
+        end);
+      WaitUntil(
+        function: Boolean
+        begin
+          Result := LDone;
+        end, CMailTimeoutMs);
+      if not LDone then
+        LText := 'Ainda aplicando; a tela E-mail mostra quando terminar.';
+      Result := LText;
+    end, True);
+  FIssuesPage.Assistant.Tools.Register('devbox_manutencao',
+    'Varredura de manutenção do Windows: quanto dá para liberar (temporários, lixo de build), disco com pouco ' +
+    'espaço, PATH quebrado e programas na inicialização. Só lê; limpar é na tela Limpeza.',
+    function(const AArgs: TJSONObject): string
+    var
+      LDone: Boolean;
+      LText: string;
+    begin
+      LDone := False;
+      RunHealth(False,
+        procedure(AText: string)
+        begin
+          LText := AText;
+          LDone := True;
+        end);
+      WaitUntil(
+        function: Boolean
+        begin
+          Result := LDone;
+        end, 300000);
+      Result := LText;
+    end);
 end;
 
 function TMainForm.ScreenContext: string;

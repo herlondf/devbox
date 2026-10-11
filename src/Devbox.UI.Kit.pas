@@ -12,6 +12,7 @@ uses
   Vcl.ExtCtrls,
   UI.Button,
   UI.Labels,
+  UI.Card,
   UI.Toggle;
 
 type
@@ -33,6 +34,12 @@ type
     function NewHint(AParent: TWinControl; const AText: string; AAlign: TAlign = alTop): TUILabel;
     function NewToggleRow(AParent: TWinControl; const ACaption, AHint: string;
       AOnChange: TNotifyEvent): TUIToggle;
+    { Design system (docs/DESIGN.md): seção em cartão com título e ARows linhas de
+      configuração. Empilha no pai (alTop) na ordem de criação. }
+    function NewSection(AParent: TWinControl; const ATitle: string; ARows: Integer): TUICard;
+    { Linha de configuração: o que é e o que faz à esquerda; devolve o painel da
+      direita (AControlW px) para o controle. }
+    function NewSettingRow(ACard: TUICard; const ATitle, ADesc: string; AControlW: Integer): TPanel;
   public
     constructor Create(AOwner: TComponent); override;
     { A tela entrou ou saiu da frente: liga e desliga timers. }
@@ -50,6 +57,15 @@ type
   end;
 
 function DevShortcut(const AKeys, ACaption: string; const AAction: TProc): TDevShortcut;
+
+const
+  { Medidas do design system (px a 96 dpi; ScaleValue na hora de usar). Ver docs/DESIGN.md. }
+  DSGap = 12;            // entre cartões, entre colunas
+  DSSectionTitleH = 30;  // título do cartão
+  DSRowH = 72;           // linha de configuração
+  DSFieldH = 44;         // campo, select, botão dentro da linha
+  DSCardPadH = 16;       // folga lateral do cartão
+  DSCardPadV = 12;
 
 var
   { A janela principal refaz o rodapé (tela com abas chama ao trocar de aba). }
@@ -258,6 +274,54 @@ end;
 
 { Switch à esquerda; título e dica num painel ao lado (alTop antes de alLeft
   tomaria a largura toda e esconderia o switch). }
+function TDevPage.NewSection(AParent: TWinControl; const ATitle: string; ARows: Integer): TUICard;
+var
+  LLabel: TUILabel;
+begin
+  Result := TUICard.Create(Self);
+  Result.Variant := cvOutlined;
+  Result.CardPad := cpNone;
+  Result.Padding.SetBounds(ScaleValue(DSCardPadH), ScaleValue(DSCardPadV), ScaleValue(DSCardPadH), ScaleValue(4));
+  Result.Height := ScaleValue(DSSectionTitleH + ARows * DSRowH + 20);
+  Result.AlignWithMargins := True;
+  Result.Margins.SetBounds(0, ScaleValue(DSGap), 0, 0);
+  Result.Top := 100000 + AParent.ControlCount * 1000;
+  Result.Align := alTop;
+  Result.Parent := AParent;
+  LLabel := TUILabel.Create(Self);
+  LLabel.Caption := ATitle;
+  LLabel.Bold := True;
+  LLabel.FontSize := 14;
+  LLabel.AutoSize := False;
+  LLabel.Height := ScaleValue(DSSectionTitleH);
+  LLabel.Align := alTop;
+  LLabel.Parent := Result;
+end;
+
+function TDevPage.NewSettingRow(ACard: TUICard; const ATitle, ADesc: string; AControlW: Integer): TPanel;
+var
+  LRow, LText: TPanel;
+  LLabel: TUILabel;
+  LPad: Integer;
+begin
+  LRow := NewPanel(ACard, alTop, DSRowH);
+  LRow.Top := 100000 + ACard.ControlCount * 1000;
+  LPad := (ScaleValue(DSRowH) - ScaleValue(DSFieldH)) div 2;
+  Result := NewPanel(LRow, alRight);
+  Result.Width := ScaleValue(AControlW);
+  Result.Padding.SetBounds(0, LPad, 0, LPad);
+  LText := NewPanel(LRow, alClient);
+  LText.Padding.SetBounds(0, ScaleValue(12), ScaleValue(16), 0);
+  LLabel := TUILabel.Create(Self);
+  LLabel.Caption := ATitle;
+  LLabel.AutoSize := False;
+  LLabel.Height := ScaleValue(20);
+  LLabel.Align := alTop;
+  LLabel.Parent := LText;
+  LLabel := NewHint(LText, ADesc, alClient);
+  LLabel.WordWrap := True;
+end;
+
 function TDevPage.NewToggleRow(AParent: TWinControl; const ACaption, AHint: string;
   AOnChange: TNotifyEvent): TUIToggle;
 var

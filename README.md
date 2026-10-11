@@ -122,6 +122,8 @@ Precisa do RAD Studio 12 (Studio 22.0) e da ComponentesUI em `..\Delphi\Componen
 
 Na IDE: abra `src\Devbox.dproj` e `src\DevboxHelper.dproj` (plataforma **Win64**; os dois saem em `bin\Win64\<config>`). O self-check fica em `tests\DevboxTests.dproj` e termina com `TUDO OK`.
 
+Padrões de tela (cores, texto, medidas, disposição): [docs/DESIGN.md](docs/DESIGN.md).
+
 ## Feito com a ComponentesUI
 
 O Devbox também é vitrine da suíte. Usa menu lateral (`TUISidebar`), lista de e-mails (`TUIMailList`), agenda (`TUIScheduler`), visualizador de áudio (`TUIAudioVisualizer`, com `TUIAudioCapture`), tabelas com selos e minigráficos (`TUIDataTable`), gráficos (`TUIChart`: treemap, barras), `TUIStat`, `TUISparkline`, `TUITimeline`, `TUISteps`, `TUICountdown`, `TUIRadialProgress`, `TUIVirtualList`, `TUICode`, `TUIImage`, `TUIDropdown`, `TUITabs`, `TUIFilterChip`, `TUIToggle`, `TUICheckbox`, `TUISelect`, `TUIInput`, `TUITextArea`, `TUIBadge`, `TUIStatus`, `TUIEmptyState`, `TUISwap` e `TUIToastManager`.

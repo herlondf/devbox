@@ -35,7 +35,6 @@ type
     FBody: TUICode;
     FDetail: TPanel;
     FPeek: TSidePeek;
-    FOrganizeBtn: TUIButton;
     FAccounts: TMailAccounts;
     FMsgs: TDictionary<string, TMailMsg>;
     FSuggest: TDictionary<string, TMailSuggestion>;
@@ -56,8 +55,6 @@ type
     function TagsOf(const AMsg: TMailMsg): TArray<string>;
     function ShownMsgs: TArray<TMailMsg>;
     procedure RefreshClick(Sender: TObject);
-    procedure OrganizeClick(Sender: TObject);
-    procedure ApplyClick(Sender: TObject);
     procedure OpenClick(Sender: TObject);
     procedure MarkReadClick(Sender: TObject);
     procedure AccountChange(Sender: TObject);
@@ -83,6 +80,15 @@ type
     function UnreadMails: TMailMsgs;
     { Abre o e-mail no painel lateral (clique no Hoje). }
     procedure OpenMessage(const AId: string);
+    { Organizar com IA (o assistente pede): lê os e-mails da lista e guarda as sugestões.
+      AOnDone recebe se deu certo e o texto para o assistente. }
+    procedure Organize(const AOnDone: TProc<Boolean, string>);
+    { Sugestões pendentes, numeradas (1, 2, ...), para o assistente mostrar. }
+    function SuggestionsText: string;
+    { Tira a sugestão de número AIndex (da lista de SuggestionsText). }
+    function DiscardSuggestion(AIndex: Integer): Boolean;
+    { Aplica todas as sugestões com ação. AOnDone recebe o resumo. }
+    procedure ApplySuggestions(const AOnDone: TProc<string>);
     destructor Destroy; override;
     { Contas mudaram: relê a lista delas e busca de novo. }
     procedure Reload;
@@ -152,7 +158,7 @@ begin
   inherited Create(AOwner);
   FRefreshable := True;
   Caption := 'E-mail';
-  Hint := 'Caixa de entrada das suas contas (Google e IMAP). A IA sugere; você escolhe o que aplicar.';
+  Hint := 'Caixa de entrada das suas contas (Google e IMAP). Para organizar, peça ao assistente.';
   FMsgs := TDictionary<string, TMailMsg>.Create;
   FSuggest := TDictionary<string, TMailSuggestion>.Create;
   FLabels := TDictionary<string, TMailLabels>.Create;
@@ -166,8 +172,6 @@ begin
   FAccountSel.Margins.SetBounds(0, 0, ScaleValue(8), 0);
   FAccountSel.Align := alLeft;
   FAccountSel.Parent := Bar;
-  FOrganizeBtn := NewButton(Bar, 'Organizar com IA', OrganizeClick, bvPrimary);
-  NewButton(Bar, 'Aplicar sugestões', ApplyClick);
   FStatus := NewHint(Self, '');
 
   // O detalhe vai para o painel lateral no primeiro clique (OpenPeek).
@@ -633,7 +637,7 @@ end;
 
 function TMailPage.PageShortcuts: TArray<TDevShortcut>;
 begin
-  Result := [DevShortcut('Delete', 'Descartar sugestão da IA', procedure
+  Result := [DevShortcut('Delete', 'Descartar sugestão do assistente', procedure
     var
       LKey: Word;
     begin
@@ -697,7 +701,7 @@ begin
     end);
 end;
 
-procedure TMailPage.OrganizeClick(Sender: TObject);
+procedure TMailPage.Organize(const AOnDone: TProc<Boolean, string>);
 var
   Msgs: TArray<TMailMsg>;
   Config: TAIConfig;
@@ -706,17 +710,20 @@ var
   Accounts: TMailAccounts;
 begin
   if FOrganizing then
+  begin
+    AOnDone(False, 'Já estou organizando; espere terminar.');
     Exit;
+  end;
   Config := LoadAIConfig;
   if not Config.Ready then
   begin
-    TUIToastManager.Show('Configure a IA em Configurações antes', ttWarning, 4000);
+    AOnDone(False, 'A IA das ações de texto não está configurada (Configuração › IA).');
     Exit;
   end;
   Msgs := Copy(ShownMsgs, 0, COrganizeMax);
   if Msgs = nil then
   begin
-    TUIToastManager.Show('Nada para organizar', ttInfo, 2000);
+    AOnDone(False, 'Não há e-mails na caixa de entrada para organizar.');
     Exit;
   end;
   Labels := nil;
@@ -724,8 +731,7 @@ begin
     Labels := Labels + Ls;
   Accounts := FAccounts;
   FOrganizing := True;
-  FOrganizeBtn.Caption := 'Organizando...';
-  TUIToastManager.Show(Format('Lendo %d e-mails e pedindo sugestões à IA...', [Length(Msgs)]), ttLoading, 5000);
+  FStatus.Caption := Format('Organizando %d e-mails com a IA...', [Length(Msgs)]);
   TTask.Run(
     procedure
     var
@@ -763,18 +769,18 @@ begin
           Acts, Idx: Integer;
         begin
           FOrganizing := False;
-          FOrganizeBtn.Caption := 'Organizar com IA';
+          UpdateStatus;
           for M in Msgs do
             if FMsgs.ContainsKey(M.Id) then
               FMsgs[M.Id] := M;
           if not Ok then
           begin
-            TUIToastManager.Show('A IA não respondeu: ' + Answer, ttError, 8000);
+            AOnDone(False, 'A IA não respondeu: ' + Answer);
             Exit;
           end;
           if Sugs = nil then
           begin
-            TUIToastManager.Show('A IA respondeu fora do formato esperado', ttError, 6000);
+            AOnDone(False, 'A IA respondeu fora do formato esperado.');
             Exit;
           end;
           for S in Sugs do
@@ -785,13 +791,56 @@ begin
           for Idx := 0 to FList.ItemCount - 1 do
             if FSuggest.TryGetValue(FList.GetItem(Idx).ID, S) and (S.Action <> maKeep) then
               Inc(Acts);
-          TUIToastManager.Show(Format('%d sugestões. Delete descarta a do e-mail aberto; Aplicar faz o resto.',
-            [Acts]), ttSuccess, 6000);
+          AOnDone(True, Format('%d e-mails lidos, %d sugestões com ação.', [Length(Msgs), Acts]) + sLineBreak +
+            SuggestionsText);
         end);
     end);
 end;
 
-procedure TMailPage.ApplyClick(Sender: TObject);
+function TMailPage.SuggestionsText: string;
+var
+  LMsg: TMailMsg;
+  LSug: TMailSuggestion;
+  LTone: TUISemanticTone;
+  LNumber: Integer;
+begin
+  Result := '';
+  LNumber := 0;
+  for LMsg in ShownMsgs do
+    if FSuggest.TryGetValue(LMsg.Id, LSug) and (LSug.Action <> maKeep) then
+    begin
+      Inc(LNumber);
+      Result := Result + Format('%d. %s (de %s): %s', [LNumber, LMsg.Subject, LMsg.FromName, NoteOf(LSug, LTone)]);
+      if LSug.Reason <> '' then
+        Result := Result + ' · ' + LSug.Reason;
+      Result := Result + sLineBreak;
+    end;
+  if Result = '' then
+    Result := 'Nenhuma sugestão pendente.';
+end;
+
+function TMailPage.DiscardSuggestion(AIndex: Integer): Boolean;
+var
+  LMsg: TMailMsg;
+  LSug: TMailSuggestion;
+  LNumber: Integer;
+begin
+  LNumber := 0;
+  for LMsg in ShownMsgs do
+    if FSuggest.TryGetValue(LMsg.Id, LSug) and (LSug.Action <> maKeep) then
+    begin
+      Inc(LNumber);
+      if LNumber = AIndex then
+      begin
+        FSuggest.Remove(LMsg.Id);
+        FillList;
+        Exit(True);
+      end;
+    end;
+  Result := False;
+end;
+
+procedure TMailPage.ApplySuggestions(const AOnDone: TProc<string>);
 type
   TJob = record
     Msg: TMailMsg;
@@ -814,12 +863,12 @@ begin
     end;
   if Jobs = nil then
   begin
-    TUIToastManager.Show('Nenhuma sugestão para aplicar (Organizar com IA antes)', ttInfo, 3500);
+    AOnDone('Nenhuma sugestão para aplicar. Peça para organizar os e-mails antes.');
     Exit;
   end;
   // Cópia para a thread: rótulos criados lá entram nela, não no cache da tela.
   Labels := TDictionary<string, TMailLabels>.Create(FLabels);
-  TUIToastManager.Show(Format('Aplicando %d sugestões...', [Length(Jobs)]), ttLoading, 3000);
+  FStatus.Caption := Format('Aplicando %d sugestões...', [Length(Jobs)]);
   TTask.Run(
     procedure
     var
@@ -862,6 +911,7 @@ begin
           begin
             Labels.Free;
             RefreshClick(nil);
+            AOnDone(Format('%d sugestões aplicadas na caixa de entrada.', [Length(Jobs)]));
           end);
       end;
     end);

@@ -174,7 +174,8 @@ begin
   FTable.AddBadgeMap('state', 'ligada', C.SuccessSubtle, C.Success);
   FTable.AddBadgeMap('state', 'desligada', C.BGMuted, C.FGMuted);
   FTable.AddBadgeMap('state', 'sem login', C.ErrorSubtle, C.Error);
-  FTable.EmptyStateText := 'Nenhuma conta';
+  FTable.EmptyState.Title := 'Nenhuma conta';
+  FTable.EmptyState.Description := 'Adicionar conta abre o login do Google no navegador.';
   FTable.Height := ScaleValue(180);
   FTable.Top := 100000;
   FTable.Align := alTop;
@@ -231,7 +232,8 @@ begin
   FImapTable.AddBadgeMap('state', 'ligada', C.SuccessSubtle, C.Success);
   FImapTable.AddBadgeMap('state', 'desligada', C.BGMuted, C.FGMuted);
   FImapTable.AddBadgeMap('state', 'sem senha', C.ErrorSubtle, C.Error);
-  FImapTable.EmptyStateText := 'Nenhuma conta IMAP';
+  FImapTable.EmptyState.Title := 'Nenhuma conta IMAP';
+  FImapTable.EmptyState.Description := 'Preencha e-mail, servidor e senha de app acima.';
   FImapTable.Top := 100000;
   FImapTable.Align := alClient;
   FImapTable.Parent := V;
@@ -254,7 +256,8 @@ begin
   FFeedTable.OnRowSelect := FeedSelect;
   FFeedTable.AddColumn('name', 'Agenda', 'name', 200);
   FFeedTable.AddColumn('host', 'Endereço', 'host', 300);
-  FFeedTable.EmptyStateText := 'Nenhum link';
+  FFeedTable.EmptyState.Title := 'Nenhum link';
+  FFeedTable.EmptyState.Description := 'Cole o link .ics da agenda (Outlook, iCloud, Google) acima.';
   FFeedTable.Top := 100000;
   FFeedTable.Align := alClient;
   FFeedTable.Parent := V;

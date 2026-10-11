@@ -30,6 +30,7 @@ uses
   Devbox.UI.Pomodoro in 'Devbox.UI.Pomodoro.pas',
   Devbox.UI.SidePeek in 'Devbox.UI.SidePeek.pas',
   Devbox.UI.HostPage in 'Devbox.UI.HostPage.pas',
+  Devbox.Health in 'Devbox.Health.pas',
   Devbox.UI.Tools in 'Devbox.UI.Tools.pas',
   Devbox.UI.Services in 'Devbox.UI.Services.pas',
   Devbox.UI.Cleanup in 'Devbox.UI.Cleanup.pas',

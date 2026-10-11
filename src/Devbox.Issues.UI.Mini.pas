@@ -1,7 +1,8 @@
-unit Devbox.Issues.UI.Mini;
+﻿unit Devbox.Issues.UI.Mini;
 
-{ Janela mini: pequena, sempre por cima, arrastável. Mostra os contadores e
-  as issues que pedem ação agora; clique numa linha abre a issue no Vigia.
+{ Janela mini: pequena, sempre por cima, arrastável. Mostra uma linha de status
+  (Pomodoro e próxima reunião, o Devbox manda), os contadores e as issues que
+  pedem ação agora; clique numa linha abre a issue no Vigia.
   A posição fica salva. }
 
 interface
@@ -22,10 +23,13 @@ type
   TMiniForm = class(TForm)
   private
     FHeader: TUILabel;
+    FStatus: TUILabel;
     FRows: TPanel;
+    FRowCount: Integer;
     FItems: TItems;
     FOnOpen: TMiniOpenEvent;
     FOnClosed: TNotifyEvent;
+    procedure FitHeight;
     procedure RowClick(Sender: TObject);
     procedure HeaderMouseDown(Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Integer);
     procedure CloseClick(Sender: TObject);
@@ -37,6 +41,8 @@ type
     constructor Create(AOwner: TComponent); override;
     { ANow = issues que pedem ação, já em ordem; os números vão no topo. }
     procedure ShowData(const ANow: TItems; AOverdue, AMine, ATotal: Integer);
+    { Linha de cima: "Pomodoro 18:20 · Próxima 14:00 Daily". Vazio esconde. }
+    procedure SetStatus(const AText: string);
     property OnOpen: TMiniOpenEvent read FOnOpen write FOnOpen;
     property OnClosed: TNotifyEvent read FOnClosed write FOnClosed;
   end;
@@ -58,6 +64,7 @@ const
   MaxRows = 6;
   RowH = 40;
   HeadH = 44;
+  StatusH = 26;
 
 constructor TMiniForm.Create(AOwner: TComponent);
 var
@@ -101,6 +108,16 @@ begin
   FHeader.OnMouseDown := HeaderMouseDown;
   FHeader.Hint := Tr('Arraste para mover');
   FHeader.ShowHint := True;
+
+  FStatus := TUILabel.Create(Self);
+  FStatus.AutoSize := False;
+  FStatus.Height := ScaleValue(StatusH);
+  FStatus.AlignWithMargins := True;
+  FStatus.Margins.SetBounds(ScaleValue(12), 0, ScaleValue(10), 0);
+  FStatus.Top := ScaleValue(HeadH) + 1;
+  FStatus.Align := alTop;
+  FStatus.Visible := False;
+  FStatus.Parent := Self;
 
   FRows := TPanel.Create(Self);
   FRows.BevelOuter := bvNone;
@@ -230,7 +247,21 @@ begin
     Title.Align := alClient;
     Title.Parent := FRows;
   end;
-  ClientHeight := ScaleValue(HeadH) + ScaleValue(RowH) * Max(1, N) + ScaleValue(6);
+  FRowCount := N;
+  FitHeight;
+end;
+
+procedure TMiniForm.SetStatus(const AText: string);
+begin
+  FStatus.Caption := AText;
+  FStatus.Visible := AText <> '';
+  FitHeight;
+end;
+
+procedure TMiniForm.FitHeight;
+begin
+  ClientHeight := ScaleValue(HeadH) + IfThen(FStatus.Visible, ScaleValue(StatusH), 0) +
+    ScaleValue(RowH) * Max(1, FRowCount) + ScaleValue(6);
 end;
 
 end.

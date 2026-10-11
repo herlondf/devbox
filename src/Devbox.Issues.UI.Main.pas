@@ -69,6 +69,7 @@ type
     FAutostartItem: TMenuItem;
     FMiniItem: TMenuItem;
     FMini: TMiniForm;                // janela mini (sempre por cima)
+    FMiniStatus: string;
     FHotkeyToggle: TUIToggle;
     FUpdateItem: TMenuItem;          // "Atualizar para x.y.z", só com versão nova
     FUpdate: TUpdateInfo;            // última release mais nova encontrada
@@ -345,6 +346,14 @@ type
     property OnPaletteCommands: TProc<TUICommandPalette> read FOnPaletteCommands write FOnPaletteCommands;
     procedure RefreshPalette;
     procedure OpenPalette;
+    { Mais um grupo no Ctrl+K (o Devbox põe clipboard, e-mail e ambientes). }
+    procedure AddSearchProvider(const AProvider: IUICommandSearchProvider);
+    { Abre o Ctrl+K já com o texto (teste: DEVBOX_PALETTE). }
+    procedure OpenPaletteWith(const AText: string);
+    { Janela mini (sempre por cima): abre ou fecha; a linha de status vem do Devbox. }
+    procedure ToggleMini;
+    procedure SetMiniStatus(const AText: string);
+    function MiniVisible: Boolean;
     { Números do cartão de uso da IA (ele mora em Configuração › IA › Custos). }
     procedure RefreshAiUsage;
     { Assistente da janela inteira: a principal registra ferramentas nele. }
@@ -855,6 +864,11 @@ begin
   FPalette.Shortcut := Tr('Ctrl+K');
   FPalette.Placeholder := Tr('Buscar tela, comando ou issue...');
   FPalette.OnItemSelect := PaletteSelect;
+  FPalette.CommandsCaption := Tr('Comandos');
+  FPalette.MoreCaption := Tr('Ver mais %d');
+  FPalette.SearchingCaption := Tr('Buscando...');
+  FPalette.NoResultsCaption := Tr('Nada encontrado');
+  FPalette.FooterCaptions := [Tr('andar'), Tr('grupo'), Tr('abrir'), Tr('fechar')];
   FPalette.AddProvider(TWatchProvider.Create);
 end;
 
@@ -1844,6 +1858,17 @@ begin
   UpdateAiUsage;
 end;
 
+procedure TIssuesPage.OpenPaletteWith(const AText: string);
+begin
+  OpenPalette;
+  FPalette.SetSearchText(AText);
+end;
+
+procedure TIssuesPage.AddSearchProvider(const AProvider: IUICommandSearchProvider);
+begin
+  FPalette.AddProvider(AProvider);
+end;
+
 procedure TIssuesPage.OpenPalette;
 begin
   FPalette.Open;
@@ -2370,7 +2395,13 @@ begin
     'devbox_tela_atual lê de novo). Traduzir, resumir, explicar, melhorar texto, mensagem de commit: responda e, ' +
     'quando o resultado for um texto para usar, ofereça devbox_copiar. Comando de terminal: devbox_rodar_comando ' +
     '(o usuário confirma antes). Organizar a caixa de e-mail: devbox_email_organizar mostra as sugestões ' +
-    'numeradas; o usuário pode descartar (devbox_email_descartar) e então devbox_email_aplicar. Responda em ' +
+    'numeradas; o usuário pode descartar (devbox_email_descartar) e então devbox_email_aplicar. Tudo que o ' +
+    'usuário faz à mão no Devbox você também faz pelas ferramentas devbox_*: abrir telas, foco, Pomodoro, ' +
+    'ambientes de projeto, agendador, avisos de fim, snippets, monitor de URL, analisar a limpeza e WSL. ' +
+    'Apagar na limpeza é sempre o usuário, na tela; você analisa e opina. Pedido de rotina ("toda sexta ' +
+    'às 17h me lembra de...") vira devbox_tarefa_criar. "Lembre que..." ou preferência duradoura vira ' +
+    'devbox_lembrar. Git: devbox_git (o que ficou sem commit) e devbox_git_diff (commit e PR). Responder ' +
+    'e-mail: devbox_email_buscar, devbox_email_ler e devbox_email_rascunho (não envia). Responda em ' +
     'markdown curto (listas, negrito) quando ajudar.') + sLineBreak + sLineBreak + LScreen;
 end;
 
@@ -4420,11 +4451,31 @@ begin
     FMini.OnOpen := NotifyOpenDetail;
     FMini.OnClosed := MiniClosed;
   end;
+  FMini.SetStatus(FMiniStatus);
   IssueStore.SetSetting('mini_on', '1');
   FMiniItem.Checked := True;
   UpdateMini;
   ShowWindow(FMini.Handle, SW_SHOWNOACTIVATE);
   FMini.Visible := True;
+end;
+
+procedure TIssuesPage.ToggleMini;
+begin
+  MiniMenuClick(nil);
+end;
+
+procedure TIssuesPage.SetMiniStatus(const AText: string);
+begin
+  if AText = FMiniStatus then
+    Exit;
+  FMiniStatus := AText;
+  if FMini <> nil then
+    FMini.SetStatus(AText);
+end;
+
+function TIssuesPage.MiniVisible: Boolean;
+begin
+  Result := (FMini <> nil) and FMini.Visible;
 end;
 
 procedure TIssuesPage.MiniClosed(Sender: TObject);

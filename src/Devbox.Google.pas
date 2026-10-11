@@ -97,6 +97,8 @@ function ListMail(const AEmail, AQuery: string; AMax: Integer; AWithBody: Boolea
 function GetMail(const AEmail, AId: string; out AMsg: TMailMsg; out AError: string): Boolean;
 function ModifyMail(const AEmail, AId: string; const AAdd, ARemove: TArray<string>; out AError: string): Boolean;
 function ListLabels(const AEmail: string; out ALabels: TMailLabels; out AError: string): Boolean;
+{ Rascunho de resposta na conversa (não envia): fica nos Rascunhos do Gmail. }
+function CreateReplyDraft(const AEmail, AThreadId, ATo, ASubject, ABody: string; out AError: string): Boolean;
 function CreateLabel(const AEmail, AName: string; out AId, AError: string): Boolean;
 
 // Agenda (só a principal)
@@ -111,6 +113,8 @@ function DigestPrompt(const AEvents: TCalEvents; const AMsgs: TMailMsgs; out ASy
 // Partes puras (self-check)
 function Base64UrlDecode(const AText: string): TBytes;
 function Base64UrlEncode(const ABytes: TBytes): string;
+{ Mensagem de resposta (RFC 822, texto puro em UTF-8): "Re: " no assunto quando falta. }
+function ReplyMime(const ATo, ASubject, ABody: string): string;
 function HtmlToText(const AHtml: string): string;
 procedure SplitFrom(const AFrom: string; out AName, AEmail: string);
 function ParseMailJson(const AJson: string; out AMsg: TMailMsg): Boolean;
@@ -901,6 +905,41 @@ begin
     Req.AddPair('addLabelIds', JsonStrArray(AAdd));
     Req.AddPair('removeLabelIds', JsonStrArray(ARemove));
     Result := Api(AEmail, 'POST', GmailUrl('messages/' + AId + '/modify'), Req.ToJSON, Resp, AError);
+  finally
+    Req.Free;
+  end;
+end;
+
+function ReplyMime(const ATo, ASubject, ABody: string): string;
+var
+  LSubject: string;
+begin
+  LSubject := ASubject;
+  if not StartsText('Re:', LSubject) then
+    LSubject := 'Re: ' + LSubject;
+  // Assunto com acento vai codificado (RFC 2047).
+  Result := 'To: ' + ATo + #13#10 +
+    'Subject: =?UTF-8?B?' + TNetEncoding.Base64String.EncodeBytesToString(TEncoding.UTF8.GetBytes(LSubject)) +
+    '?=' + #13#10 +
+    'MIME-Version: 1.0' + #13#10 +
+    'Content-Type: text/plain; charset=UTF-8' + #13#10 +
+    'Content-Transfer-Encoding: 8bit' + #13#10#13#10 +
+    StringReplace(StringReplace(ABody, #13#10, #10, [rfReplaceAll]), #10, #13#10, [rfReplaceAll]);
+end;
+
+function CreateReplyDraft(const AEmail, AThreadId, ATo, ASubject, ABody: string; out AError: string): Boolean;
+var
+  Req, Msg: TJSONObject;
+  Resp: string;
+begin
+  Req := TJSONObject.Create;
+  try
+    Msg := TJSONObject.Create;
+    Msg.AddPair('raw', Base64UrlEncode(TEncoding.UTF8.GetBytes(ReplyMime(ATo, ASubject, ABody))));
+    if AThreadId <> '' then
+      Msg.AddPair('threadId', AThreadId);
+    Req.AddPair('message', Msg);
+    Result := Api(AEmail, 'POST', GmailUrl('drafts'), Req.ToJSON, Resp, AError);
   finally
     Req.Free;
   end;

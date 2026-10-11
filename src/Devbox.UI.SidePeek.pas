@@ -87,6 +87,8 @@ begin
   FHost := AHost;
   FPeekWidth := AWidth;
   BorderStyle := bsNone;
+  // Sem isto o primeiro show usa a posição padrão do Windows e ignora o SetBounds de Place.
+  Position := poDesigned;
   PopupMode := pmExplicit;
   PopupParent := AHost;
   KeyPreview := True;
@@ -165,7 +167,9 @@ var
   LHost, LWork: TRect;
   LWidth: Integer;
 begin
-  GetWindowRect(FHost.Handle, LHost);
+  // Retângulo visível (sem a borda invisível de redimensionar do Windows 10/11).
+  if DwmGetWindowAttribute(FHost.Handle, DWMWA_EXTENDED_FRAME_BOUNDS, @LHost, SizeOf(LHost)) <> S_OK then
+    GetWindowRect(FHost.Handle, LHost);
   LWork := Screen.MonitorFromWindow(FHost.Handle).WorkareaRect;
   LWidth := ScaleValue(FPeekWidth);
   // Direita se couber; senão esquerda; sem espaço nenhum, por cima da borda direita.
@@ -186,6 +190,7 @@ begin
     Exit;
   Color := UIThemeVclBackground;
   PaintPanels(Self);
+  HandleNeeded;
   Place;
   LFinal := Left;
   LStart := LFinal + IfThen(FOnLeft, ScaleValue(CSlidePx), -ScaleValue(CSlidePx));

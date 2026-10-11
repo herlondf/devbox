@@ -31,6 +31,10 @@ uses
   Devbox.UI.SidePeek in 'Devbox.UI.SidePeek.pas',
   Devbox.UI.HostPage in 'Devbox.UI.HostPage.pas',
   Devbox.Health in 'Devbox.Health.pas',
+  Devbox.Wsl in 'Devbox.Wsl.pas',
+  Devbox.UI.Wsl in 'Devbox.UI.Wsl.pas',
+  Devbox.Git in 'Devbox.Git.pas',
+  Devbox.UI.Git in 'Devbox.UI.Git.pas',
   Devbox.UI.Tools in 'Devbox.UI.Tools.pas',
   Devbox.UI.Services in 'Devbox.UI.Services.pas',
   Devbox.UI.Cleanup in 'Devbox.UI.Cleanup.pas',
@@ -80,6 +84,9 @@ uses
   Devbox.UI.Agenda in 'Devbox.UI.Agenda.pas',
   Devbox.UI.Digest in 'Devbox.UI.Digest.pas',
   Devbox.UI.Main in 'Devbox.UI.Main.pas';
+
+// Ícone do exe, da janela e da barra de tarefas (coruja). Gerado por ci/make-icon-res.py.
+{$R Devbox.Icon.res}
 
 var
   Mutex: THandle;

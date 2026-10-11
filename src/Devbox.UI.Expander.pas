@@ -21,7 +21,6 @@ type
     FRows: TClips;          // linhas de snippet, na ordem da tabela (prontos vêm depois)
     FSel: Integer;
     FOnChanged: TNotifyEvent;
-    procedure Reload;
     procedure Changed;
     function OtherAbbrevs(AExceptId: Integer): TArray<string>;
     function SelectedSnippet(out AClip: TClip): Boolean;
@@ -32,6 +31,7 @@ type
     procedure EditClick(Sender: TObject);
     procedure RemoveClick(Sender: TObject);
   public
+    procedure Reload;
     constructor Create(AOwner: TComponent); override;
     procedure PageShown; override;
     { Edita (ou cria, com AId = 0) um snippet pelo diálogo. True = salvou. }

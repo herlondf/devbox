@@ -1,4 +1,4 @@
-program DevboxTests;
+﻿program DevboxTests;
 
 {$APPTYPE CONSOLE}
 
@@ -34,6 +34,8 @@ uses
   System.Skia,
   UI.Markdown,
   Devbox.Health in '..\src\Devbox.Health.pas',
+  Devbox.Wsl in '..\src\Devbox.Wsl.pas',
+  Devbox.Git in '..\src\Devbox.Git.pas',
   Devbox.SysInfo in '..\src\Devbox.SysInfo.pas',
   Devbox.Google in '..\src\Devbox.Google.pas',
   Devbox.ICal in '..\src\Devbox.ICal.pas',
@@ -66,6 +68,8 @@ begin
 end;
 
 procedure TestSecrets;
+var
+  LGit: TGitRepo;
 begin
   Check(LooksSecret('ghp_abcdefghijklmnopqrstuvwxyz0123456789'), 'token GitHub');
   Check(LooksSecret('glpat-xxxxxxxxxxxxxxxxxxxx'), 'token GitLab');
@@ -74,6 +78,25 @@ begin
   Check(LooksSecret('eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abc_def-123'), 'JWT');
   Check(LooksSecret('DB_PASSWORD=hunter2'), 'senha em env');
   Check(LooksSecret('Tr0ub4dor&3xyz'), 'senha forte');
+  Check(LooksSecret('AIzaSyA1234567890abcdefghijk'), 'chave Google');
+  Check(HideSecrets('use ghp_abcdefghijklmnop agora') = 'use [segredo] agora', 'esconde token');
+  Check(HideSecrets('Server=x;Password=hunter2;Db=y') = 'Server=x;Password=[segredo];Db=y', 'esconde senha');
+  Check(HideSecrets('Authorization: Bearer abc.def-123456789') = 'Authorization: Bearer [segredo]', 'esconde bearer');
+  Check(HideSecrets('texto comum, sem nada') = 'texto comum, sem nada', 'texto comum intacto');
+  Check(LooksLikeError('Traceback (most recent call last):'#10'  File "a.py", line 3, in <module>'), 'erro: python');
+  Check(LooksLikeError('java.lang.NullPointerException: x'#10'    at com.a.B.run(B.java:10)'), 'erro: java');
+  Check(LooksLikeError('src/a.ts(3,5): error TS2322: Type string'), 'erro: typescript');
+  Check(LooksLikeError('ORA-00942: table or view does not exist'), 'erro: oracle');
+  Check(not LooksLikeError('Reunião às 14h sobre o projeto novo'), 'erro: texto comum não');
+  Check(not LooksLikeError('Error'), 'erro: palavra solta curta não');
+  LGit := Default(TGitRepo);
+  ParseGitStatus('# branch.oid abc'#10'# branch.head main'#10'# branch.upstream origin/main'#10 +
+    '# branch.ab +2 -1'#10'1 .M N... 100644 100644 100644 a b src/a.pas'#10'? novo.txt'#10, LGit);
+  Check((LGit.Branch = 'main') and (LGit.Upstream = 'origin/main') and (LGit.Ahead = 2) and (LGit.Behind = 1) and
+    (LGit.Changed = 2), 'git: status porcelain v2');
+  Check(ContainsStr(ReplyMime('a@b.com', 'Reunião', 'Oi'#10'Tudo bem'), 'Subject: =?UTF-8?B?') and
+    ContainsStr(ReplyMime('a@b.com', 'Reunião', 'Oi'#10'Tudo bem'), #13#10#13#10'Oi'#13#10'Tudo bem') and
+    ContainsStr(ReplyMime('a@b.com', 'Re: x', ''), 'UmU6IHg='), 'e-mail: resposta MIME');
   Check(not LooksSecret('git status'), 'comando comum');
   Check(not LooksSecret('Vigia.UI.Main2'), 'identificador com ponto');
   Check(not LooksSecret('SELECT * FROM clip WHERE id = 1'), 'SQL');
@@ -739,6 +762,14 @@ begin
   Check((HealthDueHour(hs2PerDay, Date + EncodeTime(9, 0, 0, 0)) = -1) and
     (HealthDueHour(hs2PerDay, Date + EncodeTime(11, 0, 0, 0)) = 10) and
     (HealthDueHour(hs3PerDay, Date + EncodeTime(18, 0, 0, 0)) = 17), 'manutenção: horário da agenda');
+  Check(WslConfigSet('', 'memory', '8GB') = '[wsl2]' + sLineBreak + 'memory=8GB' + sLineBreak, 'wslconfig: cria a seção');
+  Check(WslConfigGet('[wsl2]'#13#10'memory = 4GB'#13#10'swap=0', 'Memory') = '4GB', 'wslconfig: lê a chave');
+  Check(WslConfigSet('# meu'#13#10'[wsl2]'#13#10'memory=4GB'#13#10'swap=0'#13#10#13#10'[experimental]'#13#10'x=1',
+    'memory', '8GB') = '# meu' + sLineBreak + '[wsl2]' + sLineBreak + 'memory=8GB' + sLineBreak + 'swap=0' + sLineBreak +
+    sLineBreak + '[experimental]' + sLineBreak + 'x=1' + sLineBreak, 'wslconfig: troca sem mexer no resto');
+  Check(WslConfigGet(WslConfigSet('[wsl2]'#13#10'swap=0'#13#10'[experimental]'#13#10'a=1', 'processors', '4'),
+    'processors') = '4', 'wslconfig: chave nova dentro da seção certa');
+  Check(Pos('swap', WslConfigSet('[wsl2]'#13#10'swap=0', 'swap', '')) = 0, 'wslconfig: vazio tira a chave');
   Check(NextMeetingSpeech(Ev, Date + EncodeTime(9, 40, 0, 0)) = 'Você está em Daily agora, até 9 e 45.', 'voz: reunião em andamento');
   Check(NormalizeSpeech('Oi, Java!') + '|' + NormalizeSpeech('Ação  Já.') = 'oi java|acao ja', 'voz: texto normalizado');
   Check(WakeMatch('Oi Java, resuma meus e-mails.', 'Oi Java', 0.72, Rest) and (Rest = 'resuma meus e-mails.'),
@@ -867,6 +898,22 @@ begin
   end;
 end;
 
+{ DevboxTests -lottiepng anim.json saida.png tamanho: primeiro quadro de um Lottie em PNG
+  (de onde sai o ícone do app, a coruja do assistente). }
+procedure LottiePng(const AJson, AFile: string; ASize: Integer);
+var
+  LAnim: ISkottieAnimation;
+  LSurface: ISkSurface;
+begin
+  LAnim := TSkottieAnimation.MakeFromFile(AJson);
+  LAnim.SeekFrame(0);
+  LSurface := TSkSurface.MakeRaster(ASize, ASize);
+  LSurface.Canvas.Clear(0);
+  LAnim.Render(LSurface.Canvas, TRectF.Create(0, 0, ASize, ASize));
+  LSurface.MakeImageSnapshot.EncodeToFile(AFile);
+  Writeln('ok ' + AFile);
+end;
+
 procedure Bench(const ACmd: string);
 var
   Output: string;
@@ -904,6 +951,11 @@ begin
   if FindCmdLineSwitch('health') then
   begin
     HealthProbe;
+    Exit;
+  end;
+  if FindCmdLineSwitch('lottiepng') then
+  begin
+    LottiePng(ParamStr(2), ParamStr(3), StrToIntDef(ParamStr(4), 512));
     Exit;
   end;
   if FindCmdLineSwitch('mdpng') then

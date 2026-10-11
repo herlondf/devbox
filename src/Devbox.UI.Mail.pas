@@ -56,6 +56,7 @@ type
     function ShownMsgs: TArray<TMailMsg>;
     procedure RefreshClick(Sender: TObject);
     procedure OpenClick(Sender: TObject);
+    procedure ReplyClick(Sender: TObject);
     procedure MarkReadClick(Sender: TObject);
     procedure AccountChange(Sender: TObject);
     procedure ItemClick(Sender: TObject; AIndex: Integer; const AItem: TUIVListItem);
@@ -78,6 +79,9 @@ type
     function PageContext: string; override;
     { Não lidos de todas as contas (o Hoje mostra). }
     function UnreadMails: TMailMsgs;
+    { E-mails carregados com AQuery no assunto, remetente ou trecho (Ctrl+K). }
+    function SearchMails(const AQuery: string; AMax: Integer): TMailMsgs;
+    function FindMail(const AId: string; out AMsg: TMailMsg): Boolean;
     { Abre o e-mail no painel lateral (clique no Hoje). }
     procedure OpenMessage(const AId: string);
     { Organizar com IA (o assistente pede): lê os e-mails da lista e guarda as sugestões.
@@ -189,6 +193,7 @@ begin
   FMeta := NewHint(Right, '');
   Row := NewPanel(Right, alTop, 44);
   Row.Padding.SetBounds(0, ScaleValue(4), 0, ScaleValue(4));
+  NewButton(Row, 'Responder com o assistente', ReplyClick, bvPrimary);
   NewButton(Row, 'Abrir no Gmail', OpenClick);
   NewButton(Row, 'Marcar lido', MarkReadClick, bvGhost);
   Scroll := TUIScrollArea.Create(Self);
@@ -603,6 +608,38 @@ begin
   for LMsg in FMsgs.Values do
     if LMsg.Unread then
       Result := Result + [LMsg];
+end;
+
+function TMailPage.FindMail(const AId: string; out AMsg: TMailMsg): Boolean;
+begin
+  Result := FMsgs.TryGetValue(AId, AMsg);
+end;
+
+{ O assistente escreve a resposta e oferece criar o rascunho (devbox_email_rascunho). }
+procedure TMailPage.ReplyClick(Sender: TObject);
+var
+  LMsg: TMailMsg;
+begin
+  if not FMsgs.TryGetValue(FCurrent, LMsg) or not Assigned(AskAssistant) then
+    Exit;
+  AskAssistant(Format('Escreva uma resposta curta e educada, em português, para o e-mail aberto ("%s", de %s, ' +
+    'id %s). Mostre o texto e ofereça criar o rascunho com devbox_email_rascunho.',
+    [LMsg.Subject, LMsg.FromName, LMsg.Id]));
+end;
+
+function TMailPage.SearchMails(const AQuery: string; AMax: Integer): TMailMsgs;
+var
+  LMsg: TMailMsg;
+begin
+  Result := nil;
+  for LMsg in FMsgs.Values do
+    if ContainsText(LMsg.Subject, AQuery) or ContainsText(LMsg.FromName, AQuery) or
+      ContainsText(LMsg.FromEmail, AQuery) or ContainsText(LMsg.Snippet, AQuery) then
+    begin
+      Result := Result + [LMsg];
+      if Length(Result) >= AMax then
+        Exit;
+    end;
 end;
 
 procedure TMailPage.OpenMessage(const AId: string);

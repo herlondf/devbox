@@ -2,6 +2,34 @@
 
 Formato [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
+## [0.6.0] - 2026-10-11
+
+### Adicionado
+- Tela Ambiente (WSL): distros com tamanho do disco, padrão, desligar, exportar e compactar o disco; editor do `.wslconfig` (memória, processadores, swap, liberar memória, disco esparso, rede, DNS) com backup; manutenção (desligar tudo, liberar memória, fstrim, reiniciar o serviço, atualizar).
+- Limpeza: caixas de seleção nas tabelas (com selecionar tudo) e detalhe do item no painel lateral, com "Perguntar ao assistente".
+- Assistente faz o que se faz à mão: abrir telas, foco, Pomodoro, ambientes (listar, criar, ligar, desligar), agendador (listar, criar, rodar, ligar/desligar), avisos de fim, snippets, monitor de URL, analisar a limpeza e WSL. O que mexe fora do Devbox pede confirmação.
+- Ícone do app: a coruja do assistente (exe, janela, barra de tarefas e instalador).
+- Tela Git (Ferramentas): repositórios com branch, arquivos sem commit e o que falta enviar ou puxar. Por linha: pasta, terminal e "Commit e PR com o assistente" (ele lê o diff). Assistente: `devbox_git` e `devbox_git_diff`.
+- Ctrl+K busca no clipboard, nos snippets, nos e-mails e nos ambientes (Enter copia, abre ou liga).
+- Clipboard seguro: senha ou token copiado sai do clipboard em 30 s (com "Manter"). Segredos viram [segredo] no que vai para a IA.
+- Explicar erro: copiou uma pilha de erro, o Devbox oferece a explicação do assistente (aviso na janela ou balão na bandeja, no máximo um por minuto).
+- Desfazer: excluir ambiente, tarefa, aviso de fim, URL ou item do clipboard mostra "Desfazer" por 8 s.
+- Atalhos nas tabelas: J/K andam, Enter abre o detalhe, E edita, Del exclui (Ambientes, Agendador, Avisos, Limpeza, Git).
+- Aparência: tema (sistema, claro, escuro) e densidade (compacta, confortável) em Configuração › Geral.
+- Hoje muda com a hora: de manhã agenda primeiro, à tarde issues e e-mails, no fim do dia o que ficou aberto.
+- Janela mini (bandeja ou Ctrl+K): sempre por cima, com Pomodoro, próxima reunião e issues que pedem ação.
+- Assistente: rotinas por frase ("toda sexta às 17h me lembra de...") com dias da semana e lembretes; memória (`devbox_lembrar`, `devbox_esquecer`); e-mail com rascunho de resposta (`devbox_email_buscar`, `devbox_email_ler`, `devbox_email_rascunho`; no Gmail fica nos Rascunhos, não envia). Botão "Responder com o assistente" no e-mail aberto.
+
+### Mudado
+- Limpeza: "Analisar" vira "Parar" enquanto analisa.
+- Ambientes e Agendador: ações em ícones numa coluna da tabela; detalhe no painel lateral; excluir tem "Desfazer". Passos do ambiente numa lista vertical (não cortam mais).
+- Avisos de fim: remover pelo ícone na linha.
+- Avisos (toasts) quebram linha e crescem em altura; não cortam mais o texto.
+
+### Corrigido
+- Painel lateral abria mais alto que a janela na primeira vez.
+- Barra de tarefas mostrava a janela branca padrão do Windows.
+
 ## [0.5.0] - 2026-10-10
 
 ### Adicionado

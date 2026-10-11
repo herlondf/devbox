@@ -1,4 +1,4 @@
-unit Devbox.UI.Jobs;
+﻿unit Devbox.UI.Jobs;
 
 { Agendador: comandos que rodam a cada N minutos, todo dia ou em dias da
   semana, com o histórico das execuções numa linha do tempo. Roda com o
@@ -18,6 +18,7 @@ uses
   UI.Timeline,
   UI.DataTable,
   Devbox.Jobs,
+  Devbox.UI.SidePeek,
   Devbox.UI.Kit;
 
 type
@@ -32,10 +33,11 @@ type
     FRunsScroll: TUIScrollArea;
     FTimeline: TUITimeline;
     FOutput: TUICode;
-    procedure Reload;
+    FDetail: TPanel;
+    FPeek: TSidePeek;
+    FUndo: TJob;
     procedure FillRuns;
     function SelectedJob(out AJob: TJob): Boolean;
-    procedure RunJob(const AJob: TJob);
     procedure TimerTick(Sender: TObject);
     procedure RowSelect(Sender: TObject; ARowIndex: Integer);
     procedure RowDblClick(Sender: TObject; ARowIdx: Integer);
@@ -44,7 +46,14 @@ type
     procedure RunNowClick(Sender: TObject);
     procedure ToggleClick(Sender: TObject);
     procedure DeleteClick(Sender: TObject);
+    procedure UndoDelete(Sender: TObject);
+    procedure ActionClick(Sender: TObject; ARowIdx, AActionIdx: Integer);
+    procedure OpenPeek;
   public
+    procedure RunJob(const AJob: TJob);
+    function PageKey(var AKey: Word; AShift: TShiftState): Boolean; override;
+    function PageShortcuts: TArray<TDevShortcut>; override;
+    procedure Reload;
     constructor Create(AOwner: TComponent); override;
     destructor Destroy; override;
     procedure PageShown; override;
@@ -53,6 +62,7 @@ type
 implementation
 
 uses
+  Vcl.Forms,
   Winapi.Windows,
   System.StrUtils,
   System.Math,
@@ -102,14 +112,11 @@ begin
   Bar := NewPanel(Self, alTop, 50);
   Bar.Padding.SetBounds(0, 0, 0, ScaleValue(8));
   NewButton(Bar, 'Nova tarefa', NewClick, bvPrimary);
-  NewButton(Bar, 'Editar', EditClick);
-  NewButton(Bar, 'Rodar agora', RunNowClick);
-  NewButton(Bar, 'Ligar/desligar', ToggleClick, bvGhost);
-  NewButton(Bar, 'Excluir', DeleteClick, bvGhost, alRight);
 
-  Right := NewPanel(Self, alRight);
-  Right.Width := ScaleValue(340);
-  Right.Padding.SetBounds(ScaleValue(14), 0, 0, 0);
+  // Execuções e saída: vão para o painel lateral no primeiro clique (OpenPeek).
+  Right := NewPanel(Self, alClient);
+  Right.Parent := nil;
+  FDetail := Right;
   FRunsTitle := TUILabel.Create(Self);
   FRunsTitle.Caption := 'Últimas execuções';
   FRunsTitle.Bold := True;
@@ -146,6 +153,13 @@ begin
   FTable.AddBadgeMap('state', 'rodando', C.InfoSubtle, C.Info);
   FTable.AddBadgeMap('state', 'desligada', C.BGMuted, C.FGMuted);
   FTable.AddBadgeMap('state', 'nunca', C.BGMuted, C.FGMuted);
+  FTable.AddColumn('acoes', '', 'acoes', 128);
+  FTable.SetColType('acoes', ctAction);
+  FTable.AddActionToCol('acoes', LineIcon(ActionPlay), 'Rodar agora');
+  FTable.AddActionToCol('acoes', LineIcon(ActionPower), 'Ligar ou desligar');
+  FTable.AddActionToCol('acoes', LineIcon(ActionEdit), 'Editar');
+  FTable.AddActionToCol('acoes', LineIcon(ActionDelete), 'Excluir');
+  FTable.OnActionClick := ActionClick;
   FTable.EmptyState.Title := 'Nenhuma tarefa';
   FTable.EmptyState.Description := 'Ex.: backup do banco todo dia às 18:00. Se falhar, avisa na bandeja.';
   FTable.Top := 100000;
@@ -260,6 +274,47 @@ procedure TJobsPage.RowSelect(Sender: TObject; ARowIndex: Integer);
 begin
   FSel := ARowIndex;
   FillRuns;
+  if not KeyNavigating or ((FPeek <> nil) and FPeek.Visible) then
+    OpenPeek;
+end;
+
+function TJobsPage.PageKey(var AKey: Word; AShift: TShiftState): Boolean;
+begin
+  Result := TableKey(FTable, AKey, OpenPeek, procedure begin EditClick(nil); end,
+    procedure begin DeleteClick(nil); end);
+end;
+
+function TJobsPage.PageShortcuts: TArray<TDevShortcut>;
+begin
+  Result := TableShortcuts(FTable, OpenPeek, procedure begin EditClick(nil); end,
+    procedure begin DeleteClick(nil); end);
+end;
+
+procedure TJobsPage.OpenPeek;
+const
+  CPeekW = 460;
+var
+  J: TJob;
+begin
+  if FPeek = nil then
+  begin
+    FPeek := TSidePeek.CreatePeek(GetParentForm(Self), CPeekW);
+    FDetail.Parent := FPeek.Body;
+  end;
+  if SelectedJob(J) then
+    FPeek.Title := J.Name;
+  FPeek.Open;
+end;
+
+procedure TJobsPage.ActionClick(Sender: TObject; ARowIdx, AActionIdx: Integer);
+begin
+  FSel := ARowIdx;
+  case AActionIdx of
+    0: RunNowClick(nil);
+    1: ToggleClick(nil);
+    2: EditClick(nil);
+    3: DeleteClick(nil);
+  end;
 end;
 
 procedure TJobsPage.RowDblClick(Sender: TObject; ARowIdx: Integer);
@@ -317,7 +372,8 @@ begin
           if Code <> 0 then
             Notify('Tarefa falhou: ' + Job.Name, TailLines(Output, 3), True)
           else if Job.NotifyOk then
-            Notify('Tarefa pronta: ' + Job.Name, TailLines(Output, 3));
+            Notify(IfThen(StartsText('echo ', Job.Command), 'Lembrete: ', 'Tarefa pronta: ') + Job.Name,
+              TailLines(Output, 3));
           Reload;
         end);
     end);
@@ -391,9 +447,20 @@ begin
   if not SelectedJob(J) then
     Exit;
   Store.DeleteJob(J.Id);
+  FUndo := J;
   FSel := -1;
+  if FPeek <> nil then
+    FPeek.Close_;
   Reload;
-  TUIToastManager.Show('Tarefa excluída: ' + J.Name, ttSuccess, 2500);
+  TUIToastManager.Show('Tarefa excluída: ' + J.Name, ttInfo, DSUndoMs, 'Desfazer', UndoDelete);
+end;
+
+{ Volta como tarefa nova: o histórico de execuções da antiga não volta. }
+procedure TJobsPage.UndoDelete(Sender: TObject);
+begin
+  FUndo.Id := 0;
+  Store.SaveJob(FUndo);
+  Reload;
 end;
 
 end.

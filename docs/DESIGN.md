@@ -99,6 +99,12 @@ explicação à esquerda, controle à direita (toggle 60, select 300, botão 200
 | Resultado de ação | toast (`TUIToastManager`) | Diálogo |
 | Aviso fora da janela | `Notify` (balão da bandeja) | Toast |
 | Atalho de teclado na tela | `PageKey` + `PageShortcuts` | Botão só para atalho |
+| Ações de uma linha (ligar, editar, excluir) | coluna `ctAction` com ícones (`AddActionToCol`, `LineIcon`) | Botões na barra que agem na linha escolhida |
+| Escolher várias linhas | `ShowCheckboxes` na `TUIDataTable` | Ctrl+clique sem pista visual |
+| Ação longa (analisar) | o mesmo botão vira "Parar" | Dois botões |
+| Teclado na tabela | `TableKey` + `TableShortcuts` (J/K, Enter, E, Del) | Atalho próprio por tela |
+| Excluir algo do Devbox | excluir na hora + toast "Desfazer" (`DSUndoMs`) | Pedir confirmação antes |
+| Excluir algo fora do Devbox (disco, WSL) | toast com botão de confirmar | Desfazer (não volta) |
 
 ## 7. Botões
 

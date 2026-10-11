@@ -43,6 +43,7 @@ type
     // URLs
     FUrlTable: TUIDataTable;
     FChecks: TUrlChecks;
+    FUrlUndo: TUrlCheck;
     FStates: TDictionary<Integer, TUrlState>;
     FChecking: TDictionary<Integer, Boolean>;
     FUrlSel: Integer;
@@ -67,7 +68,6 @@ type
     function NewView(ATab: TNetTab; const AHint: string): TPanel;
     procedure TabChange(Sender: TObject; AIndex: Integer);
     // URLs
-    procedure ReloadUrls;
     procedure FillUrls;
     procedure UrlTimerTick(Sender: TObject);
     procedure CheckOne(const ACheck: TUrlCheck);
@@ -77,6 +77,7 @@ type
     procedure UrlEdit(Sender: TObject);
     procedure UrlCheckNow(Sender: TObject);
     procedure UrlDelete(Sender: TObject);
+    procedure UrlUndo(Sender: TObject);
     // VPN
     procedure VpnTimerTick(Sender: TObject);
     procedure VpnSaveClick(Sender: TObject);
@@ -89,6 +90,7 @@ type
     procedure HookHit(const AHit: TWebhookHit);
     procedure HookCodeChange(Sender: TObject);
   public
+    procedure ReloadUrls;
     constructor Create(AOwner: TComponent); override;
     destructor Destroy; override;
   end;
@@ -528,9 +530,18 @@ procedure TNetworkPage.UrlDelete(Sender: TObject);
 begin
   if (FUrlSel < 0) or (FUrlSel > High(FChecks)) then
     Exit;
-  Store.DeleteUrlCheck(FChecks[FUrlSel].Id);
-  FStates.Remove(FChecks[FUrlSel].Id);
+  FUrlUndo := FChecks[FUrlSel];
+  Store.DeleteUrlCheck(FUrlUndo.Id);
+  FStates.Remove(FUrlUndo.Id);
   FUrlSel := -1;
+  ReloadUrls;
+  TUIToastManager.Show('URL excluída: ' + FUrlUndo.Name, ttInfo, DSUndoMs, 'Desfazer', UrlUndo);
+end;
+
+procedure TNetworkPage.UrlUndo(Sender: TObject);
+begin
+  FUrlUndo.Id := 0;
+  Store.SaveUrlCheck(FUrlUndo);
   ReloadUrls;
 end;
 

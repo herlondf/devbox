@@ -145,7 +145,8 @@ begin
   FEnvFolder := NewPathInput(Bar, 'Pasta do projeto', 'env_folder');
   FEnvTable := TUIDataTable.Create(Self);
   FEnvTable.Density := tdCompact;
-  FEnvTable.EmptyStateText := 'Escolha a pasta e clique em Comparar';
+  FEnvTable.EmptyState.Title := 'Nada comparado';
+  FEnvTable.EmptyState.Description := 'Escolha a pasta do projeto e clique em Comparar.';
   FEnvTable.Top := 100000;
   FEnvTable.Align := alClient;
   FEnvTable.Parent := FViews[ttEnv];

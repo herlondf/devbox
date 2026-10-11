@@ -119,7 +119,8 @@ begin
   FTable.AddColumn('name', 'Ambiente', 'name', 220);
   FTable.AddColumn('steps', 'Passos', 'steps', 70, False, caRight);
   FTable.AddColumn('what', 'Liga', 'what', 300);
-  FTable.EmptyStateText := 'Nenhum ambiente. Clique em Novo ambiente.';
+  FTable.EmptyState.Title := 'Nenhum ambiente';
+  FTable.EmptyState.Description := 'Novo ambiente liga containers, terminal, editor e navegador de um projeto.';
   FTable.Top := 100000;
   FTable.Align := alClient;
   FTable.Parent := Self;

@@ -52,6 +52,7 @@ type
 implementation
 
 uses
+  UI.Card,
   Winapi.Windows,
   Winapi.TlHelp32,
   System.StrUtils,
@@ -105,17 +106,26 @@ begin
 end;
 
 constructor TWatchesPage.Create(AOwner: TComponent);
+const
+  CFormRowH = 52;
+  CHintH = 24;
 var
   Bar: TPanel;
+  LCard: TUICard;
 begin
   inherited Create(AOwner);
   Caption := 'Avisos de fim';
   Hint := 'Avisa na bandeja quando um processo termina, uma porta fecha ou um container para';
   FSel := -1;
 
-  Bar := NewPanel(Self, alTop, 50);
-  Bar.Padding.SetBounds(0, 0, 0, ScaleValue(8));
-  NewButton(Bar, 'Avisar', AddClick, bvPrimary);
+  // Novo aviso: um cartão com o formulário numa linha (tipo, alvo, escolher, avisar).
+  LCard := NewSection(Self, 'Novo aviso', 0);
+  LCard.Height := ScaleValue(DSSectionTitleH + CFormRowH + CHintH + 2 * DSCardPadV);
+  LCard.Margins.SetBounds(0, 0, 0, 0);
+  Bar := NewPanel(LCard, alTop, CFormRowH);
+  Bar.Top := 100000;
+  Bar.Padding.SetBounds(0, ScaleValue(4), 0, ScaleValue(4));
+  NewButton(Bar, 'Avisar', AddClick, bvPrimary, alRight).Left := 100000;  // alRight: maior Left fica na ponta
   FKind := TUISelect.Create(Self);
   FKind.Items.Add('Processo terminar');
   FKind.Items.Add('Porta fechar');
@@ -127,7 +137,9 @@ begin
   FKind.Left := 100000;
   FKind.Align := alLeft;
   FKind.Parent := Bar;
-  FPickBtn := NewButton(Bar, 'Escolher…', PickClick, bvGhost);
+  FPickBtn := NewButton(Bar, 'Escolher…', PickClick, bvGhost, alRight);
+  FPickBtn.AlignWithMargins := True;
+  FPickBtn.Margins.SetBounds(ScaleValue(8), 0, ScaleValue(8), 0);
   FTarget := TUIInput.Create(Self);
   FTarget.LabelMode := ilmBorder;
   FTarget.ReserveHintSpace := False;
@@ -137,12 +149,13 @@ begin
   FPick.AnchorControl := FPickBtn;
   FPick.MaxHeight := 420;
   FPick.OnItemClick := PickItem;
-  NewHint(Self, 'Container: use o botão "Avisar quando parar" na tela Serviços. ' +
-    'Dica: pid:1234 vigia um processo só, quando há vários com o mesmo nome.');
+  NewHint(LCard, 'Container: botão "Avisar quando parar" em Serviços. pid:1234 vigia um processo só, quando há ' +
+    'vários com o mesmo nome.').Top := 200000;
 
-  Bar := NewPanel(Self, alTop, 50);
-  Bar.Padding.SetBounds(0, ScaleValue(6), 0, ScaleValue(6));
-  NewButton(Bar, 'Remover', RemoveClick, bvGhost);
+  // Ações sobre a lista: embaixo, como no resto do Devbox.
+  Bar := NewPanel(Self, alBottom, 52);
+  Bar.Padding.SetBounds(0, ScaleValue(10), 0, 0);
+  NewButton(Bar, 'Remover aviso', RemoveClick, bvGhost, alRight);
 
   FTable := TUIDataTable.Create(Self);
   FTable.SelectionMode := tsmSingle;
@@ -151,7 +164,10 @@ begin
   FTable.AddColumn('kind', 'Tipo', 'kind', 120);
   FTable.AddColumn('what', 'Esperando', 'what', 420);
   FTable.AddColumn('since', 'Desde', 'since', 120);
-  FTable.EmptyStateText := 'Nenhum aviso ativo';
+  FTable.EmptyState.Title := 'Nenhum aviso ativo';
+  FTable.EmptyState.Description := 'Avisa na bandeja quando um processo termina, uma porta fecha ou um container para.';
+  FTable.AlignWithMargins := True;
+  FTable.Margins.SetBounds(0, ScaleValue(DSGap), 0, 0);
   FTable.Top := 100000;
   FTable.Align := alClient;
   FTable.Parent := Self;

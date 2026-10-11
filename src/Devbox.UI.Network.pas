@@ -171,7 +171,8 @@ begin
   FUrlTable.AddBadgeMap('state', 'fora', C.ErrorSubtle, C.Error);
   FUrlTable.AddBadgeMap('state', 'checando', C.InfoSubtle, C.Info);
   FUrlTable.SetColType('trend', ctSparkline);
-  FUrlTable.EmptyStateText := 'Nenhuma URL. Ex.: a API de homologação ou o seu site.';
+  FUrlTable.EmptyState.Title := 'Nenhuma URL';
+  FUrlTable.EmptyState.Description := 'Ex.: a API de homologação ou o seu site. Avisa quando cai ou volta.';
   FUrlTable.Top := 100000;
   FUrlTable.Align := alClient;
   FUrlTable.Parent := FViews[ntUrls];
@@ -284,7 +285,8 @@ begin
   FHookTable.AddBadgeMap('method', 'POST', C.SuccessSubtle, C.Success);
   FHookTable.AddBadgeMap('method', 'PUT', C.WarningSubtle, C.Warning);
   FHookTable.AddBadgeMap('method', 'DELETE', C.ErrorSubtle, C.Error);
-  FHookTable.EmptyStateText := 'Nenhuma chamada ainda';
+  FHookTable.EmptyState.Title := 'Nenhuma chamada ainda';
+  FHookTable.EmptyState.Description := 'Ligue o receptor e mande um POST para o endereço acima.';
   FHookTable.Top := 100000;
   FHookTable.Align := alClient;
   FHookTable.Parent := FViews[ntWebhook];

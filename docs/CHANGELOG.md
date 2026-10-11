@@ -2,6 +2,20 @@
 
 Formato [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
+## [0.5.0] - 2026-10-10
+
+### Adicionado
+- Manutenção do Windows: 2 ou 3 vezes por dia (Configuração › Geral) o Devbox procura temporários, lixo de build, pouco espaço em disco, PATH quebrado e excesso de programas na inicialização, e avisa. Clicar no aviso abre a Limpeza. Só lê. O assistente também roda (`devbox_manutencao`).
+- E-mail pelo assistente: organizar a caixa, ver e descartar sugestões e aplicar (com confirmação).
+- Design system em `docs/DESIGN.md`: cores, texto, medidas, anatomia de tela e checklist.
+
+### Mudado
+- E-mail: saíram os botões "Organizar com IA" e "Aplicar sugestões" (o assistente faz).
+- Configuração › Geral em cartões com o que cada opção faz.
+- Avisos de fim: formulário num cartão, ações embaixo da lista.
+- Estados vazios com título curto e uma linha do que fazer (não cortam mais).
+- Avisos (toasts) acima do rodapé e do botão do assistente.
+
 ## [0.4.0] - 2026-10-09
 
 ### Adicionado

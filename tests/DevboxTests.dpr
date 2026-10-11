@@ -33,6 +33,7 @@ uses
   System.Types,
   System.Skia,
   UI.Markdown,
+  Devbox.Health in '..\src\Devbox.Health.pas',
   Devbox.SysInfo in '..\src\Devbox.SysInfo.pas',
   Devbox.Google in '..\src\Devbox.Google.pas',
   Devbox.ICal in '..\src\Devbox.ICal.pas',
@@ -735,6 +736,9 @@ begin
   Check(ParseVoiceIntent('{"acao":"agenda","dia":"amanha"}', R) and (R.Action = vaAgenda) and (R.Day = Date + 1),
     'voz: intenção agenda de amanhã');
   Check(ParseVoiceIntent('{"acao":"issues"}', R) and (R.Action = vaIssues), 'voz: intenção issues');
+  Check((HealthDueHour(hs2PerDay, Date + EncodeTime(9, 0, 0, 0)) = -1) and
+    (HealthDueHour(hs2PerDay, Date + EncodeTime(11, 0, 0, 0)) = 10) and
+    (HealthDueHour(hs3PerDay, Date + EncodeTime(18, 0, 0, 0)) = 17), 'manutenção: horário da agenda');
   Check(NextMeetingSpeech(Ev, Date + EncodeTime(9, 40, 0, 0)) = 'Você está em Daily agora, até 9 e 45.', 'voz: reunião em andamento');
   Check(NormalizeSpeech('Oi, Java!') + '|' + NormalizeSpeech('Ação  Já.') = 'oi java|acao ja', 'voz: texto normalizado');
   Check(WakeMatch('Oi Java, resuma meus e-mails.', 'Oi Java', 0.72, Rest) and (Rest = 'resuma meus e-mails.'),
@@ -817,6 +821,19 @@ begin
   Check(CleanPath(E, False) = 'C:\bin;C:\sumiu;%SystemRoot%\system32', 'PATH: limpo mantendo a que não existe');
 end;
 
+{ DevboxTests -health: roda a varredura de manutenção (só lê) e mostra o aviso e o tempo. }
+procedure HealthProbe;
+var
+  LStart: UInt64;
+  LReport: THealthReport;
+begin
+  LStart := GetTickCount64;
+  LReport := RunHealthScan([GetEnvironmentVariable('USERPROFILE')], 30);
+  Writeln(Format('%d ms, %d achados', [GetTickCount64 - LStart, LReport.Findings]));
+  Writeln(LReport.Title);
+  Writeln(LReport.Text);
+end;
+
 { DevboxTests -mdpng saida.png: desenha um markdown de exemplo como a bolha do
   assistente desenha (UI.Markdown), para ver sem chamar IA. }
 procedure MarkdownPng(const AFile: string);
@@ -882,6 +899,11 @@ begin
   if FindCmdLineSwitch('vosk') then
   begin
     RunVoskProbe;
+    Exit;
+  end;
+  if FindCmdLineSwitch('health') then
+  begin
+    HealthProbe;
     Exit;
   end;
   if FindCmdLineSwitch('mdpng') then

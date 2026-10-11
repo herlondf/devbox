@@ -741,7 +741,8 @@ begin
   FCostTable.AddColumn('audio', 'Tokens de áudio', 'audio', 140);
   FCostTable.AddColumn('minutes', 'Minutos', 'minutes', 90);
   FCostTable.AddColumn('cost', 'Custo (US$)', 'cost', 110);
-  FCostTable.EmptyStateText := 'Nenhum uso de IA paga este mês';
+  FCostTable.EmptyState.Title := 'Nada gasto este mês';
+  FCostTable.EmptyState.Description := 'O uso das IAs pagas aparece aqui conforme você usa.';
   FCostTable.Height := ScaleValue(240);
   FCostTable.Top := 100000;
   FCostTable.Align := alTop;
